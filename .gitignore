@@ -25,3 +25,12 @@ build/
 .claude/
 chimera_v1/
 spatcar/
+
+# Real-data validation files
+examples/real_breast_cancer/data/
+examples/real_breast_cancer/outputs/
+*.h5ad
+*.h5
+*.loom
+*.mtx
+*.mtx.gz
