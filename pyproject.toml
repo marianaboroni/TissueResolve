@@ -67,7 +67,7 @@ where = ["src"]
 tissueresolve = ["data/gene_lists/*.tsv", "data/gene_lists/*.txt"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "examples/real_breast_cancer/tests"]
 addopts = "-v --tb=short"
 
 [tool.coverage.run]
