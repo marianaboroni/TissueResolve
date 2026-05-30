@@ -16,6 +16,6 @@ Future (Stage 4)
 ``stability``
     Cross-run stability checks.
 """
-from tissueresolve.uncertainty.bootstrap import BulkBootstrapCI
+from tissueresolve.uncertainty.bootstrap import BulkBootstrapCI, SpatialBootstrapCI
 
-__all__ = ["BulkBootstrapCI"]
+__all__ = ["BulkBootstrapCI", "SpatialBootstrapCI"]

@@ -32,6 +32,7 @@ from tissueresolve.io.validation import (
     validate_no_duplicate_genes,
 )
 from tissueresolve.io.bulk import read_bulk_counts, read_bulk_metadata
+from tissueresolve.io.spatial import load_visium, load_visium_h5ad, make_synthetic_visium
 
 __all__ = [
     # reference I/O
@@ -47,4 +48,8 @@ __all__ = [
     # bulk I/O (Stage 3)
     "read_bulk_counts",
     "read_bulk_metadata",
+    # spatial I/O (Stage 4)
+    "load_visium",
+    "load_visium_h5ad",
+    "make_synthetic_visium",
 ]

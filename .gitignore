@@ -23,3 +23,5 @@ build/
 
 # Claude local metadata
 .claude/
+chimera_v1/
+spatcar/
