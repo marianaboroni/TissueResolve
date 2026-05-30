@@ -53,6 +53,25 @@ Validation is therefore qualitative:
 - Default tests are offline and mock all downloads.
 - Legacy `chimera_v1/` and `spatcar/` are never touched.
 
+## Census version compatibility
+
+`cellxgene-census` pins a `tiledbsoma` range, and newer Census `stable`
+releases can use a SOMA object-encoding version an older `tiledbsoma` cannot
+read (`Unsupported SOMA object encoding version`). The downloader is therefore
+version-aware: it defaults to a pinned LTS release, falls back across older
+pinned releases (skipping incompatible ones), accepts `--census-version`, and
+stops with installed-version diagnostics + a manual fallback if none work. The
+resolved version and both package versions are recorded in the manifest.
+
+## Resumability and Python compatibility
+
+Downloads are idempotent: existing files are reused (`status: already_exists`)
+unless `--force` is given, so a partial run resumes without re-fetching the
+reference. The spatial loader works on Python 3.9–3.11 via a `tarfile`
+extraction-filter shim (PEP 706 `data_filter` is 3.12+); the downloaded Visium
+AnnData is validated and a counts layer is ensured from a count-like `X` when
+absent, with all decisions recorded in the manifest.
+
 ## Limitations
 
 - mRNA-proportion ground truth depends on the reference's count depths; it is

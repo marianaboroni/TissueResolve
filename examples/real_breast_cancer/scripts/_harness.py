@@ -126,6 +126,12 @@ def default_manifest(*, access_date: Optional[str] = None) -> dict[str, Any]:
 
         access_date = datetime.now(timezone.utc).isoformat()
     versions = package_versions()
+
+    def _rel(p: Path) -> str:
+        try:
+            return str(p.relative_to(HARNESS_DIR))
+        except ValueError:
+            return str(p)
     return {
         "schema_version": MANIFEST_SCHEMA_VERSION,
         "generated_by": "00_download_data.py",
@@ -146,7 +152,7 @@ def default_manifest(*, access_date: Optional[str] = None) -> dict[str, Any]:
                     "max_genes": MAX_REFERENCE_GENES,
                     "applied": False,
                 },
-                "file": str(REFERENCE_H5AD.relative_to(HARNESS_DIR)),
+                "file": _rel(REFERENCE_H5AD),
                 "downloaded": False,
             },
             "spatial": {
@@ -158,7 +164,7 @@ def default_manifest(*, access_date: Optional[str] = None) -> dict[str, Any]:
                 "package_versions": versions,
                 "filters_applied": [],
                 "downsampling": {"applied": False},
-                "file": str(SPATIAL_H5AD.relative_to(HARNESS_DIR)),
+                "file": _rel(SPATIAL_H5AD),
                 "downloaded": False,
             },
         },
@@ -199,13 +205,22 @@ def read_manifest(path: Path = MANIFEST_PATH) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+#: Sentinel override values that mean "auto-detect" rather than a literal column.
+AUTO_DETECT_TOKENS = {None, "", "auto"}
+
+
 def detect_cell_type_col(obs: "pd.DataFrame", override: Optional[str] = None) -> str:
     """Return the cell-type annotation column to use.
 
-    Honours *override* first, then the documented candidate list.  Raises a
+    *override* is honoured as a literal column name **unless** it is an
+    auto-detect sentinel (``None``, ``""``, or ``"AUTO"`` in any case), in which
+    case the documented candidate list is searched in priority order.  Raises a
     clear error listing what was searched and what is available.
     """
-    if override is not None:
+    is_auto = override is None or (
+        isinstance(override, str) and override.strip().lower() in {"", "auto"}
+    )
+    if not is_auto:
         if override not in obs.columns:
             raise KeyError(
                 f"--cell-type-col {override!r} not in obs columns: {list(obs.columns)}"

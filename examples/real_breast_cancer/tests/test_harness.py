@@ -87,6 +87,27 @@ def test_detect_cell_type_col_missing_raises(harness):
         harness.detect_cell_type_col(obs)
 
 
+@pytest.mark.parametrize("token", ["AUTO", "auto", "Auto", "", "  ", None])
+def test_detect_cell_type_col_auto_tokens(harness, token):
+    # Mirrors the real Census obs columns from the failing run.
+    obs = pd.DataFrame(columns=[
+        "cell_type", "tissue", "disease", "assay", "donor_id",
+        "is_primary_data", "tissue_general",
+    ])
+    assert harness.detect_cell_type_col(obs, token) == "cell_type"
+
+
+def test_detect_cell_type_col_auto_respects_priority(harness):
+    obs = pd.DataFrame(columns=["cell_type", "cell_type_major"])
+    assert harness.detect_cell_type_col(obs, "AUTO") == "cell_type_major"
+
+
+def test_detect_cell_type_col_auto_no_match_raises(harness):
+    obs = pd.DataFrame(columns=["nope"])
+    with pytest.raises(KeyError):
+        harness.detect_cell_type_col(obs, "auto")
+
+
 # ---------------------------------------------------------------------------
 # Reference preparation
 # ---------------------------------------------------------------------------

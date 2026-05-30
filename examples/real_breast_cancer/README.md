@@ -38,8 +38,15 @@ highly-expressed genes, preserving major cell types.
 ```bash
 source ../../.venv/bin/activate
 python -m pip install -e "../..[all]"
-# For real downloads of the reference:
-python -m pip install cellxgene-census
+```
+
+Real-data validation additionally requires `cellxgene-census` (a heavy,
+opt-in dependency kept out of `[all]`). Install it via the `realdata` extra:
+
+```bash
+python -m pip install -e ".[realdata]"
+# or, equivalently:
+python -m pip install -U cellxgene-census
 ```
 
 ## Run order
@@ -53,6 +60,10 @@ python scripts/00_download_data.py
 # 0') Real download (opt-in):
 python scripts/00_download_data.py --run-real-data
 #   or:  TISSUERESOLVE_RUN_REAL_DATA=1 python scripts/00_download_data.py
+#   pick a specific Census release:
+python scripts/00_download_data.py --run-real-data --census-version 2023-07-25
+#   re-download even if the target files already exist:
+python scripts/00_download_data.py --run-real-data --force
 
 # 1) Build the TissueResolve reference (NB overdispersion for spatial too):
 python scripts/01_prepare_reference.py            # --cell-type-col / --min-cells
@@ -69,6 +80,84 @@ python scripts/04_run_spatial_validation.py
 # 5) Summary report (works after a partial run):
 python scripts/05_summarize_results.py
 ```
+
+## Progress reporting
+
+`00_download_data.py` prints progress as it works:
+
+- **Reference (Census)** — stage-level progress, since the Census API exposes
+  no byte total:
+  ```
+  [  5%] reference: checking package versions (census=1.15.0, tiledbsoma=1.11.4) (elapsed 00:00:00)
+  [ 10%] reference: opening census (version=2024-07-01) (elapsed 00:00:01)
+  [ 35%] reference: selecting breast-cancer cells (elapsed 00:00:09)
+  [ 50%] reference: retrieving AnnData subset (elapsed 00:00:20)
+  [ 70%] reference: downsampling cells/genes if needed (elapsed 00:01:05)
+  [ 85%] reference: writing h5ad (elapsed 00:01:10)
+  [100%] reference: saved reference h5ad (84.2 MB) (elapsed 00:01:12)
+  ```
+  Cell/gene counts are printed after loading and after downsampling, and the
+  output file size after saving.
+- **Direct HTTP downloads** — byte-level progress when `Content-Length` is
+  known, else downloaded MB + elapsed:
+  ```
+  [42.3%] 317.5 MB / 750.0 MB elapsed 00:03:21
+  [ --- ] 317.5 MB downloaded elapsed 00:03:21      # no Content-Length
+  ```
+
+## Re-running / skipping downloads
+
+By default the downloader **reuses any file that already exists** and records
+`status: already_exists` (reference) / `spatial_status: already_exists`
+(spatial) in the manifest — so a partial run is resumable and the reference is
+never re-fetched needlessly. Pass `--force` to re-download.
+
+## Python 3.9 and the spatial `tarfile.data_filter` error
+
+scanpy's Visium loader extracts a tar archive and references
+`tarfile.data_filter`, which only exists on Python 3.12+ (PEP 706). On Python
+3.9–3.11 this surfaces as:
+
+```
+module 'tarfile' has no attribute 'data_filter'
+```
+
+The downloader installs a permissive compatibility shim before calling the
+loader (the 10x public dataset is trusted), so the spatial download works on
+Python 3.9. Whether the attribute was natively available is recorded as
+`tarfile_data_filter_available` in the manifest. The downloaded AnnData is
+validated (spots, genes, `layers['counts']`, `obsm['spatial']`); if no counts
+layer exists and `X` is count-like, `X` is copied into `layers['counts']` and
+the decision is recorded.
+
+## CELLxGENE Census compatibility
+
+If you see:
+
+```
+ValueError: Unsupported SOMA object encoding version 1.1.0
+```
+
+it means the installed `tiledbsoma` (pinned by your `cellxgene-census`) cannot
+read the **current `stable`** Census release. The downloader handles this:
+
+- It does **not** default to `stable`. It defaults to a pinned LTS release
+  (`2024-07-01`) and **falls back** across older releases
+  (`2023-12-15`, `2023-07-25`, `2023-05-15`, then `stable`), skipping any that
+  raise the SOMA-encoding error.
+- Pick a release explicitly with `--census-version YYYY-MM-DD`.
+- If **all** releases fail, the script stops with an actionable message listing
+  the installed `cellxgene-census` / `tiledbsoma` versions, the requested
+  version, and the recommended fix:
+  ```
+  python -m pip install -U cellxgene-census tiledbsoma
+  ```
+- Manual fallback: download a human breast-cancer single-cell `.h5ad` (with
+  cell-type annotations) from https://cellxgene.cziscience.com/ and save it to
+  `data/reference/breast_cancer_sc_reference.h5ad`, then run script 01.
+
+The resolved `census_version`, both package versions, timings, file sizes, and
+any fallback versions attempted are recorded in `data/download_manifest.json`.
 
 ## Expected outputs
 
