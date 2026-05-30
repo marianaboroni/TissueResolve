@@ -24,4 +24,19 @@ try:
 except PackageNotFoundError:
     __version__ = "0.1.0-dev"
 
-__all__ = ["__version__"]
+from tissueresolve.api import (
+    build_reference,
+    deconv_bulk,
+    deconv_spatial,
+    generate_report,
+    plot_results,
+)
+
+__all__ = [
+    "__version__",
+    "build_reference",
+    "deconv_bulk",
+    "deconv_spatial",
+    "generate_report",
+    "plot_results",
+]

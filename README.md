@@ -25,38 +25,100 @@ available.
 RNA-derived cellular composition estimates**, not direct single-cell counts
 unless explicitly calibrated.
 
+## Status
+
+Stages 0–5 are implemented: shared reference layer, protocol layer, the full
+bulk workflow (wNNLS + bootstrap + QC + CLI), the full spatial workflow
+(NB-CAR model + graph + QC + neighbourhood + benchmark + CLI), and the
+unification layer (plotting, HTML reports, methods text, docs, compliance
+tests). Real-data validation is a **separate, offline-by-default** harness and
+is not part of the default test suite.
+
 ## Installation
 
 ```bash
 # Core (bulk only)
 pip install tissueresolve
 
-# With spatial dependencies
+# With spatial dependencies (scanpy, scikit-learn)
 pip install "tissueresolve[spatial]"
 
-# Full install including plotting and report generation
+# Full install including plotting (matplotlib) and report generation
 pip install "tissueresolve[all]"
 ```
 
-For development:
+## Development setup
 
 ```bash
 git clone <repo>
 cd TissueResolve
-pip install -e ".[all]"
+python -m venv .venv && source .venv/bin/activate
+python -m pip install -e ".[all]"
 ```
 
-## Quick start
+## Running tests
+
+The default suite is fast, deterministic, and **offline** — it never accesses
+the network or downloads datasets.
+
+```bash
+source .venv/bin/activate
+python -m pytest -v                 # full suite
+python -m pytest tests/spatial -v   # one area
+python -m pytest -k compliance -v   # scientific-rule compliance tests
+```
+
+## Bulk quickstart (toy data)
 
 ```python
-# Bulk
+import numpy as np, pandas as pd
 import tissueresolve as tr
+from tissueresolve.results import ReferenceSignature
 
-# Spatial
-import tissueresolve as tr
+genes = [f"GENE_{i:03d}" for i in range(60)]
+cell_types = ["Tcell", "Bcell", "Myeloid"]
+
+# Toy L1-normalised reference signature (genes x cell types)
+rng = np.random.default_rng(0)
+phi = rng.exponential(1.0, (len(genes), len(cell_types)))
+phi /= phi.sum(axis=0, keepdims=True)
+ref = ReferenceSignature(gene_names=genes, cell_types=cell_types, phi=phi)
+
+# Toy bulk counts (genes x samples)
+bulk = pd.DataFrame(
+    rng.poisson(50, (len(genes), 4)),
+    index=genes, columns=[f"sample_{i}" for i in range(4)],
+)
+
+result = tr.deconv_bulk(bulk, ref)          # BulkPipelineResult
+print(result.deconv.proportions)            # mRNA proportions (NOT cell fractions)
+print(result.deconv.ESTIMATE_TYPE)          # 'mRNA_proportion'
 ```
 
-Full tutorials in `examples/`.
+## Spatial quickstart (toy data)
+
+```python
+import numpy as np
+import tissueresolve as tr
+from tissueresolve.spatial.benchmark import simulate_visium
+
+ds = simulate_visium(n_spots=80, n_types=3, n_genes=40, seed=0)
+ref = ds.to_reference()
+Y = ds.dense_counts()
+
+result = tr.deconv_spatial(
+    Y, ref, ds.array_row, ds.array_col, ds.lib_sizes, ds.gene_names,
+    marker_genes=list(ds.gene_names),
+)
+print(result.deconv.proportions.head())     # spot-level RNA-derived composition
+print(result.deconv.lambda_spatial)         # smoothing parameter (always recorded)
+
+# Figures (each saves its underlying data) and an HTML report:
+figs = tr.plot_results(result, "out/figs", array_row=ds.array_row, array_col=ds.array_col)
+tr.generate_report(result, "out/report.html", figures=figs)
+```
+
+Or via the CLI: `tissueresolve spatial run --visium ... --reference ... --output ...`
 
 ## Architecture
 
