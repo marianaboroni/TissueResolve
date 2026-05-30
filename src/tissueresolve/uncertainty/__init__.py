@@ -1,14 +1,21 @@
 """
 Uncertainty estimation for TissueResolve.
 
-Submodules (implemented in Stages 3–4):
+Public API (Stage 3)
+--------------------
+``bootstrap.BulkBootstrapCI``
+    Gene-panel bootstrap for bulk deconvolution.  Returns empirical
+    percentile CIs for each sample × cell-type.  Non-suppressible warning
+    emitted when fewer than ``MIN_PANEL_GENES`` genes are available.
 
-``bootstrap``
-    BootstrapCI — gene-panel bootstrap for bulk deconvolution (from CHIMERA).
-    bootstrap_proportions — parametric bootstrap for spatial deconvolution
-    (from SpatCAR).  Both return (ci_lo, ci_hi, metadata) with documented
-    nominal-vs-empirical coverage.
+Future (Stage 4)
+----------------
+``bootstrap.SpatialBootstrapCI``
+    Parametric bootstrap for spatial deconvolution (from SpatCAR).
 
 ``stability``
-    Cross-run stability checks (future).
+    Cross-run stability checks.
 """
+from tissueresolve.uncertainty.bootstrap import BulkBootstrapCI
+
+__all__ = ["BulkBootstrapCI"]

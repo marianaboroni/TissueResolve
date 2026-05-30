@@ -11,9 +11,15 @@ Public API (Stage 1)
 ``validate_gene_names_match``, ``validate_counts_matrix``
     Input validation utilities used throughout the pipeline.
 
-Future modules (Stages 3–4)
+Public API (Stage 3 — bulk)
 ----------------------------
-``bulk``   — read bulk count matrices.
+``read_bulk_counts``
+    Load a genes × samples bulk count matrix from TSV or CSV.
+``read_bulk_metadata``
+    Load sample-level metadata from TSV or CSV.
+
+Future (Stage 4)
+----------------
 ``spatial`` — load 10x Visium data; save spatial results.
 """
 from tissueresolve.io.reference import load_reference_csv, load_reference_h5ad
@@ -25,6 +31,7 @@ from tissueresolve.io.validation import (
     validate_matrix_shape,
     validate_no_duplicate_genes,
 )
+from tissueresolve.io.bulk import read_bulk_counts, read_bulk_metadata
 
 __all__ = [
     # reference I/O
@@ -37,4 +44,7 @@ __all__ = [
     "validate_cell_type_column",
     "validate_gene_names_match",
     "validate_counts_matrix",
+    # bulk I/O (Stage 3)
+    "read_bulk_counts",
+    "read_bulk_metadata",
 ]
