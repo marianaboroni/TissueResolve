@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
@@ -266,6 +266,177 @@ def adata_with_raw_counts(adata):
 
 
 # ---------------------------------------------------------------------------
+# Gene identifier harmonisation
+# ---------------------------------------------------------------------------
+
+#: Preferred ``var`` columns carrying gene symbols, in priority order.
+REFERENCE_GENE_COLS = ["feature_name", "gene_name", "gene_symbol",
+                       "gene_symbols", "symbol"]
+SPATIAL_GENE_COLS = ["gene_symbols", "gene_name", "feature_name", "symbol"]
+
+
+def _looks_like_gene_symbols(values, frac: float = 0.5) -> bool:
+    """Heuristic: do these labels look like gene symbols (not numeric / Ensembl)?"""
+    vals = [str(v).strip() for v in list(values)[:200]]
+    vals = [v for v in vals if v]
+    if not vals:
+        return False
+
+    def _is_symbol(v: str) -> bool:
+        if v.isdigit():
+            return False
+        u = v.upper()
+        if u.startswith("ENSG") or u.startswith("ENSMUSG") or u.startswith("ENST"):
+            return False
+        return True
+
+    return sum(_is_symbol(v) for v in vals) / len(vals) >= frac
+
+
+def _finalize_ids(ids, source: str) -> tuple[list[str], str, dict[str, Any]]:
+    """Strip, reject-empty, and detect duplicates for a chosen identifier set."""
+    cleaned = [str(x).strip() for x in ids]
+    empties = [i for i, s in enumerate(cleaned)
+               if s == "" or s.lower() in {"nan", "none"}]
+    if empties:
+        raise ValueError(
+            f"Gene identifier source {source!r} has {len(empties)} empty/NaN "
+            f"value(s) (e.g. positions {empties[:5]}); choose another column."
+        )
+    arr = np.asarray(cleaned, dtype=object)
+    unique, counts = np.unique(arr, return_counts=True)
+    dup_mask = counts > 1
+    info = {
+        "source": source,
+        "n_genes": len(cleaned),
+        "n_unique": int(len(unique)),
+        "n_duplicate_labels": int(dup_mask.sum()),
+        "n_duplicated_genes": int(counts[dup_mask].sum()) if dup_mask.any() else 0,
+        "has_duplicates": bool(dup_mask.any()),
+        "duplicate_examples": [str(x) for x in unique[dup_mask][:5]],
+    }
+    return cleaned, source, info
+
+
+def select_gene_identifiers(
+    adata,
+    preferred_columns: Optional[list[str]] = None,
+    *,
+    fallback_to_var_names: bool = True,
+    require_symbol_like_var_names: bool = False,
+) -> tuple[list[str], str, dict[str, Any]]:
+    """Select gene identifiers from an AnnData.
+
+    Tries each entry of *preferred_columns* in order — a ``var`` column name,
+    or the literal token ``"var_names"`` to use the index.  Falls back to
+    ``var_names`` when nothing matched (if *fallback_to_var_names*).
+
+    Returns ``(gene_ids, source, info)`` with ``gene_ids`` as stripped,
+    non-empty strings; *info* reports duplicates (handled downstream by
+    :func:`harmonize_reference_genes`).
+    """
+    cols = preferred_columns if preferred_columns is not None else REFERENCE_GENE_COLS
+    for c in cols:
+        if c == "var_names":
+            if require_symbol_like_var_names and not _looks_like_gene_symbols(adata.var_names):
+                continue
+            return _finalize_ids(list(adata.var_names), "var_names")
+        if c in adata.var.columns:
+            return _finalize_ids(adata.var[c].tolist(), f"var['{c}']")
+    if fallback_to_var_names:
+        return _finalize_ids(list(adata.var_names), "var_names")
+    raise KeyError(
+        f"No gene-identifier column found.  Tried {cols}; available var "
+        f"columns: {list(adata.var.columns)}."
+    )
+
+
+def select_reference_gene_identifiers(adata):
+    """Reference (CELLxGENE) gene IDs: prefer ``feature_name`` over numeric var_names."""
+    return select_gene_identifiers(
+        adata, preferred_columns=[*REFERENCE_GENE_COLS, "var_names"],
+        fallback_to_var_names=True,
+    )
+
+
+def select_spatial_gene_identifiers(adata):
+    """Spatial (Visium) gene IDs: prefer symbol-like ``var_names``, else symbol columns.
+
+    ``gene_ids`` (Ensembl) are intentionally *not* used unless the caller
+    explicitly switches to Ensembl-based matching.
+    """
+    return select_gene_identifiers(
+        adata, preferred_columns=["var_names", *SPATIAL_GENE_COLS],
+        fallback_to_var_names=True, require_symbol_like_var_names=True,
+    )
+
+
+def _aggregate_duplicate_gene_columns(X, gene_ids):
+    """Sum count columns sharing a gene symbol.  Returns ``(newX, unique_ids)``.
+
+    *X* is ``cells × genes``; the result is ``cells × n_unique`` with genes in
+    sorted-unique order.
+    """
+    import scipy.sparse as sp
+
+    names = np.asarray([str(g) for g in gene_ids], dtype=object)
+    unique, inverse = np.unique(names, return_inverse=True)
+    n_genes, n_unique = len(names), len(unique)
+    agg = sp.csr_matrix(
+        (np.ones(n_genes, dtype=np.float64), (np.arange(n_genes), inverse)),
+        shape=(n_genes, n_unique),
+    )
+    if sp.issparse(X):
+        new_X = (X @ agg).tocsr()
+    else:
+        new_X = np.asarray(X, dtype=np.float64) @ agg.toarray()
+    return new_X, [str(u) for u in unique]
+
+
+def harmonize_reference_genes(adata, preferred_columns: Optional[list[str]] = None):
+    """Return an AnnData whose ``var_names`` are harmonised gene symbols.
+
+    Selects gene identifiers (CELLxGENE ``feature_name`` over numeric
+    ``soma_joinid`` var_names), then **aggregates duplicate symbols by summing
+    counts** so the reference has a unique symbol axis.  ``obs`` is preserved.
+
+    Returns ``(new_adata, info)`` where *info* records the gene-id source,
+    counts source, duplicate strategy, and gene counts.
+    """
+    import anndata as ad
+
+    ids, source, dup = select_gene_identifiers(
+        adata, preferred_columns=(preferred_columns
+                                  if preferred_columns is not None
+                                  else [*REFERENCE_GENE_COLS, "var_names"]),
+        fallback_to_var_names=True,
+    )
+    mat, counts_source = resolve_counts_matrix(adata)  # cells × genes
+
+    if dup["has_duplicates"]:
+        new_X, out_ids = _aggregate_duplicate_gene_columns(mat, ids)
+        strategy = "aggregate_sum"
+    else:
+        new_X, out_ids = mat, [str(g) for g in ids]
+        strategy = "none"
+
+    new = ad.AnnData(
+        X=new_X, obs=adata.obs.copy(),
+        var=pd.DataFrame(index=pd.Index(out_ids, name=None)),
+    )
+    info = {
+        "gene_id_source": source,
+        "counts_source": counts_source,
+        "duplicate_strategy": strategy,
+        "n_input_genes": dup["n_genes"],
+        "n_output_genes": len(out_ids),
+        "n_duplicate_labels": dup["n_duplicate_labels"],
+        "duplicate_examples": dup["duplicate_examples"],
+    }
+    return new, info
+
+
+# ---------------------------------------------------------------------------
 # Reference preparation (script 01 logic)
 # ---------------------------------------------------------------------------
 
@@ -277,6 +448,8 @@ class ReferencePrep:
     cell_type_counts: "pd.Series"
     summary: "pd.DataFrame"
     counts_source: str
+    gene_id_source: str = "var_names"
+    gene_info: dict = field(default_factory=dict)
 
 
 def prepare_reference(
@@ -285,13 +458,17 @@ def prepare_reference(
     cell_type_col: Optional[str] = None,
     min_cells: int = MIN_CELLS_PER_TYPE,
     estimate_overdispersion: bool = True,
+    preferred_gene_columns: Optional[list[str]] = None,
 ) -> ReferencePrep:
     """Build a TissueResolve reference from a single-cell AnnData.
 
-    Uses the discovered public API:
+    Gene identifiers are **harmonised to gene symbols first** (CELLxGENE
+    references carry numeric ``soma_joinid`` var_names but gene symbols in
+    ``var['feature_name']``), with duplicate symbols aggregated by summing
+    counts.  Then the discovered public API is used:
     ``ReferenceBuilder(ReferenceConfig(...)).build_from_adata(adata,
-    estimate_overdispersion=...)``.  ``estimate_overdispersion=True`` so the
-    same reference serves the spatial NB model.
+    estimate_overdispersion=...)`` — with ``estimate_overdispersion=True`` so
+    the same reference serves the spatial NB model.
     """
     from tissueresolve.config import ReferenceConfig
     from tissueresolve.reference.build import ReferenceBuilder
@@ -299,22 +476,28 @@ def prepare_reference(
     col = detect_cell_type_col(adata.obs, cell_type_col)
     counts = adata.obs[col].astype(str).value_counts()
 
-    counts_adata, source = adata_with_raw_counts(adata)
+    harmonized, gene_info = harmonize_reference_genes(
+        adata, preferred_columns=preferred_gene_columns)
     cfg = ReferenceConfig(celltype_col=col, min_cells=min_cells)
     builder = ReferenceBuilder(cfg)
     ref = builder.build_from_adata(
-        counts_adata, estimate_overdispersion=estimate_overdispersion
+        harmonized, estimate_overdispersion=estimate_overdispersion
     )
 
     summary = pd.DataFrame({
         "metric": ["n_cells", "n_genes", "n_cell_types", "cell_type_col",
-                   "min_cells", "counts_source"],
+                   "min_cells", "counts_source", "gene_id_source",
+                   "duplicate_strategy", "n_duplicate_labels"],
         "value": [int(adata.n_obs), int(ref.n_genes), int(ref.n_cell_types),
-                  col, int(min_cells), source],
+                  col, int(min_cells), gene_info["counts_source"],
+                  gene_info["gene_id_source"], gene_info["duplicate_strategy"],
+                  gene_info["n_duplicate_labels"]],
     })
     return ReferencePrep(
         reference=ref, cell_type_col=col,
-        cell_type_counts=counts, summary=summary, counts_source=source,
+        cell_type_counts=counts, summary=summary,
+        counts_source=gene_info["counts_source"],
+        gene_id_source=gene_info["gene_id_source"], gene_info=gene_info,
     )
 
 
@@ -581,6 +764,14 @@ def write_tsv(df: "pd.DataFrame", path: Path, comment: Optional[list[str]] = Non
             fh.write(f"# {line}\n")
         df.to_csv(fh, sep="\t")
     return path
+
+
+def read_text_or(path: Path, default: str) -> str:
+    """Return the stripped contents of *path*, or *default* if absent/unreadable."""
+    try:
+        return Path(path).read_text(encoding="utf-8").strip()
+    except Exception:
+        return default
 
 
 def write_json(obj: Any, path: Path) -> Path:

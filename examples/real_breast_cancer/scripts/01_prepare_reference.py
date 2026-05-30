@@ -49,9 +49,13 @@ def main(argv: list[str] | None = None) -> int:
         adata, cell_type_col=args.cell_type_col, min_cells=args.min_cells,
         estimate_overdispersion=True,
     )
-    print(f"  cell-type column: {prep.cell_type_col}  (source: {prep.counts_source})")
-    print(f"  reference: {prep.reference.n_genes} genes × "
+    print(f"  cell-type column: {prep.cell_type_col}  (counts: {prep.counts_source})")
+    print(f"  gene-id source  : {prep.gene_id_source} "
+          f"(duplicate strategy: {prep.gene_info.get('duplicate_strategy')}, "
+          f"{prep.gene_info.get('n_duplicate_labels')} duplicate symbol(s))")
+    print(f"  reference       : {prep.reference.n_genes} genes × "
           f"{prep.reference.n_cell_types} cell types")
+    print(f"  gene names head : {list(prep.reference.gene_names[:5])}")
 
     H.ensure_dirs()
     prep.reference.save(H.SAVED_REFERENCE_DIR)
@@ -61,6 +65,9 @@ def main(argv: list[str] | None = None) -> int:
                 H.OUT_REFERENCE_DIR / "cell_type_counts.tsv")
     (H.OUT_REFERENCE_DIR / "selected_annotation_column.txt").write_text(
         prep.cell_type_col + "\n", encoding="utf-8"
+    )
+    (H.OUT_REFERENCE_DIR / "selected_gene_identifier_column.txt").write_text(
+        prep.gene_id_source + "\n", encoding="utf-8"
     )
     print(f"Saved reference object -> {H.SAVED_REFERENCE_DIR}")
     print(f"Saved summaries        -> {H.OUT_REFERENCE_DIR}")

@@ -203,6 +203,133 @@ def test_all_pseudobulk_files_read_with_canonical_reader(harness, tiny_sc_adata,
 
 
 # ---------------------------------------------------------------------------
+# Gene identifier harmonisation (regression for the soma_joinid bug)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def numeric_var_adata():
+    """Reference-like AnnData: numeric var_names + symbols in var['feature_name']."""
+    import anndata as ad
+
+    X = np.array([[1, 2, 3], [4, 5, 6], [7, 8, 9], [10, 11, 12]], dtype="float32")
+    obs = pd.DataFrame({"cell_type": ["T", "T", "B", "B"]},
+                       index=[f"c{i}" for i in range(4)])
+    var = pd.DataFrame({"feature_name": ["A2M", "AACS", "EPCAM"]},
+                       index=["1", "2", "3"])  # numeric soma_joinid-like
+    return ad.AnnData(X=X, obs=obs, var=var)
+
+
+def test_select_gene_identifiers_prefers_feature_name(harness, numeric_var_adata):
+    ids, source, info = harness.select_reference_gene_identifiers(numeric_var_adata)
+    assert ids == ["A2M", "AACS", "EPCAM"]
+    assert source == "var['feature_name']"
+    assert info["has_duplicates"] is False
+
+
+def test_select_gene_identifiers_strips_and_rejects_empty(harness):
+    import anndata as ad
+
+    var = pd.DataFrame({"feature_name": ["A2M", "  ", "EPCAM"]}, index=["1", "2", "3"])
+    a = ad.AnnData(X=np.ones((2, 3), dtype="float32"), var=var)
+    with pytest.raises(ValueError, match="empty"):
+        harness.select_gene_identifiers(a, preferred_columns=["feature_name"])
+
+
+def test_select_spatial_prefers_symbol_var_names(harness):
+    import anndata as ad
+
+    a = ad.AnnData(X=np.ones((2, 3), dtype="float32"),
+                   var=pd.DataFrame({"gene_ids": ["ENSG1", "ENSG2", "ENSG3"]},
+                                    index=["A2M", "AACS", "EPCAM"]))
+    ids, source, info = harness.select_spatial_gene_identifiers(a)
+    assert ids == ["A2M", "AACS", "EPCAM"]
+    assert source == "var_names"
+
+
+def test_harmonize_uses_feature_name_not_numeric(harness, numeric_var_adata):
+    new, info = harness.harmonize_reference_genes(numeric_var_adata)
+    assert list(new.var_names) == ["A2M", "AACS", "EPCAM"]
+    assert info["gene_id_source"] == "var['feature_name']"
+    assert info["duplicate_strategy"] == "none"
+
+
+def test_harmonize_aggregates_duplicate_symbols_by_sum(harness):
+    import anndata as ad
+
+    # Two columns map to EPCAM → summed; A2M unique.
+    X = np.array([[1, 10, 100], [2, 20, 200]], dtype="float32")  # cells × genes
+    var = pd.DataFrame({"feature_name": ["A2M", "EPCAM", "EPCAM"]},
+                       index=["1", "2", "3"])
+    a = ad.AnnData(X=X, obs=pd.DataFrame({"cell_type": ["T", "B"]},
+                                         index=["c0", "c1"]), var=var)
+    new, info = harness.harmonize_reference_genes(a)
+    assert info["duplicate_strategy"] == "aggregate_sum"
+    assert info["n_duplicate_labels"] == 1
+    assert sorted(new.var_names) == ["A2M", "EPCAM"]
+    # EPCAM column = sum of the two EPCAM columns (10+100=110, 20+200=220)
+    epcam = np.asarray(new[:, "EPCAM"].X).ravel()
+    np.testing.assert_array_equal(epcam, np.array([110.0, 220.0]))
+
+
+def test_prepare_reference_uses_symbols(harness):
+    import anndata as ad
+
+    # Enough cells per type to survive a small min_cells.
+    rng = np.random.default_rng(0)
+    n = 40
+    X = rng.poisson(3, (n, 3)).astype("float32")
+    obs = pd.DataFrame({"cell_type": (["T"] * 20 + ["B"] * 20)},
+                       index=[f"c{i}" for i in range(n)])
+    var = pd.DataFrame({"feature_name": ["A2M", "AACS", "EPCAM"]},
+                       index=["1", "2", "3"])
+    a = ad.AnnData(X=X, obs=obs, var=var)
+    prep = harness.prepare_reference(a, min_cells=5)
+    assert list(prep.reference.gene_names) == ["A2M", "AACS", "EPCAM"]
+    assert prep.gene_id_source == "var['feature_name']"
+    assert "var['feature_name']" in set(prep.summary["value"])
+
+
+def test_pseudobulk_uses_symbols_after_harmonization(harness):
+    import anndata as ad
+
+    rng = np.random.default_rng(0)
+    n = 40
+    X = rng.poisson(3, (n, 3)).astype("float32")
+    obs = pd.DataFrame({"cell_type": (["T"] * 20 + ["B"] * 20)},
+                       index=[f"c{i}" for i in range(n)])
+    var = pd.DataFrame({"feature_name": ["A2M", "AACS", "EPCAM"]},
+                       index=["1", "2", "3"])
+    a = ad.AnnData(X=X, obs=obs, var=var)
+
+    harmonized, _ = harness.harmonize_reference_genes(a)
+    counts, props, meta = harness.generate_pseudobulk(
+        harmonized, "cell_type", n_per_regime=4, n_cells=20, seed=0)
+    assert sorted(counts.index) == ["A2M", "AACS", "EPCAM"]
+    # No numeric gene IDs leaked through.
+    assert not any(str(g).isdigit() for g in counts.index)
+
+
+def test_spatial_overlap_positive_after_fix(harness):
+    import anndata as ad
+
+    # Reference symbols vs spatial symbols — overlap must be > 0.
+    ref = ad.AnnData(X=np.ones((4, 3), dtype="float32"),
+                     obs=pd.DataFrame({"cell_type": ["T", "T", "B", "B"]},
+                                      index=[f"c{i}" for i in range(4)]),
+                     var=pd.DataFrame({"feature_name": ["A2M", "AACS", "EPCAM"]},
+                                      index=["1", "2", "3"]))
+    _, ref_info = harness.harmonize_reference_genes(ref)
+    ref_genes = ["A2M", "AACS", "EPCAM"]
+
+    spatial = ad.AnnData(X=np.ones((5, 4), dtype="float32"),
+                         var=pd.DataFrame(index=["A2M", "AACS", "EPCAM", "MIR1302"]))
+    sp_ids, _, _ = harness.select_spatial_gene_identifiers(spatial)
+    overlap = harness.gene_overlap(sp_ids, ref_genes)
+    assert overlap["n_shared"] == 3
+
+
+# ---------------------------------------------------------------------------
 # Metrics (hand-checked)
 # ---------------------------------------------------------------------------
 

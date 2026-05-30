@@ -47,6 +47,15 @@ def main(argv: list[str] | None = None) -> int:
     col = H.detect_cell_type_col(adata.obs, args.cell_type_col)
     print(f"  cell-type column: {col}")
 
+    # Harmonise gene identifiers the SAME way as the reference (script 01), so
+    # pseudobulk gene names are symbols matching the saved reference, not the
+    # numeric CELLxGENE soma_joinid var_names.
+    adata, gene_info = H.harmonize_reference_genes(adata)
+    print(f"  gene-id source  : {gene_info['gene_id_source']} "
+          f"(duplicate strategy: {gene_info['duplicate_strategy']}, "
+          f"{gene_info['n_duplicate_labels']} duplicate symbol(s))")
+    print(f"  gene names head : {[str(g) for g in adata.var_names[:5]]}")
+
     counts_df, true_props_df, meta_df = H.generate_pseudobulk(
         adata, col, n_per_regime=args.n_per_regime,
         n_cells=args.n_cells, seed=args.seed,
@@ -56,7 +65,8 @@ def main(argv: list[str] | None = None) -> int:
     H.ensure_dirs()
     H.write_tsv(counts_df, H.PSEUDOBULK_COUNTS,
                 comment=["pseudobulk raw counts (genes × samples)",
-                         f"seed: {args.seed}", f"cell_type_col: {col}"])
+                         f"seed: {args.seed}", f"cell_type_col: {col}",
+                         f"gene_id_source: {gene_info['gene_id_source']}"])
     H.write_tsv(true_props_df, H.PSEUDOBULK_TRUE_PROPS,
                 comment=["GROUND TRUTH: mRNA proportions (count-fraction per "
                          "cell type), NOT cell fractions.",

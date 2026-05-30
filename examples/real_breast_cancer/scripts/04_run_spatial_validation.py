@@ -83,14 +83,27 @@ def main(argv: list[str] | None = None) -> int:
 
     lib_sizes = (np.asarray(Y.sum(axis=1)).ravel()
                  if sp.issparse(Y) else Y.sum(axis=1)).astype("float32")
-    gene_names = list(adata.var_names)
+
+    # Select spatial gene identifiers explicitly (prefer symbol-like var_names).
+    gene_names, sp_source, sp_info = H.select_spatial_gene_identifiers(adata)
     spot_ids = list(adata.obs_names)
 
     ref = ReferenceSignature.load(H.SAVED_REFERENCE_DIR)
+    ref_source = H.read_text_or(
+        H.OUT_REFERENCE_DIR / "selected_gene_identifier_column.txt", "unknown")
+    print(f"Reference gene-id source: {ref_source}; "
+          f"spatial gene-id source: {sp_source} "
+          f"(duplicates: {sp_info['n_duplicate_labels']}).")
+
     overlap = H.gene_overlap(gene_names, ref.gene_names)
     print(f"Gene overlap (spatial vs reference): {overlap}")
     if overlap["n_shared"] == 0:
-        print("ERROR: no shared genes between Visium and reference.", file=sys.stderr)
+        print("ERROR: no shared genes between Visium and reference.",
+              file=sys.stderr)
+        print(f"  reference genes head: {list(ref.gene_names[:10])}",
+              file=sys.stderr)
+        print(f"  spatial genes head  : {[str(g) for g in gene_names[:10]]}",
+              file=sys.stderr)
         return 1
 
     print("Running spatial deconvolution …")
