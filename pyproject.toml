@@ -53,6 +53,12 @@ dev = [
     "pytest>=7.4",
     "pytest-cov>=4.1",
 ]
+realdata = [
+    # Real-data validation harness only (examples/real_breast_cancer/).
+    # Used to query the CZ CELLxGENE Census for a breast-cancer reference.
+    # Kept out of [all] because it is a heavy, opt-in dependency.
+    "cellxgene-census",
+]
 all = [
     "tissueresolve[spatial,report,plots,dev]",
 ]

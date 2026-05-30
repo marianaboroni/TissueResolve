@@ -42,17 +42,33 @@ def main(argv: list[str] | None = None) -> int:
     from tissueresolve.results import ReferenceSignature
     import tissueresolve as tr
 
-    bulk = read_bulk_counts(H.PSEUDOBULK_COUNTS)            # genes × samples
+    bulk_raw = read_bulk_counts(H.PSEUDOBULK_COUNTS)
     true_props = pd.read_csv(H.PSEUDOBULK_TRUE_PROPS, sep="\t",
                              comment="#", index_col=0)
     ref = ReferenceSignature.load(H.SAVED_REFERENCE_DIR)
 
+    # Orient as genes × samples and normalise gene-name dtype (genes may parse
+    # as int; the reference stores them as str).  Orientation is reported.
+    print(f"Pseudobulk loaded with shape {bulk_raw.shape} "
+          f"(index head={[str(x) for x in bulk_raw.index[:3]]}, "
+          f"columns head={[str(x) for x in bulk_raw.columns[:3]]}).")
+    try:
+        bulk, orient = H.orient_bulk_genes_by_samples(bulk_raw, ref.gene_names)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+    print(f"Detected orientation: {orient['orientation']} "
+          f"(genes on index after orientation: {orient['n_index_shared']} shared "
+          f"vs on columns: {orient['n_col_shared']}); "
+          f"using {bulk.shape[0]} genes × {bulk.shape[1]} samples.")
+
+    ref_gene_set = set(map(str, ref.gene_names))
     overlap = H.gene_overlap(bulk.index, ref.gene_names)
     print(f"Gene overlap (bulk vs reference): {overlap}")
-    shared = [g for g in bulk.index if g in set(ref.gene_names)]
+    shared = [g for g in bulk.index if g in ref_gene_set]
     if not shared:
-        print("ERROR: no shared genes between pseudobulk and reference.",
-              file=sys.stderr)
+        print("ERROR: no shared genes between pseudobulk and reference "
+              "after orientation/normalisation.", file=sys.stderr)
         return 1
     bulk = bulk.loc[shared]
 

@@ -489,7 +489,13 @@ def per_celltype_metrics(true_df: "pd.DataFrame", est_df: "pd.DataFrame") -> "pd
 
 
 def gene_overlap(query_genes, reference_genes) -> dict[str, int]:
-    """Report gene-overlap counts between a query and the reference."""
+    """Report gene-overlap counts between a query and the reference.
+
+    Both sides are coerced to ``str`` so that gene IDs that look numeric
+    (e.g. ``'4'`` saved by the reference vs ``4`` parsed by pandas) still
+    match — the same coercion :func:`orient_bulk_genes_by_samples` applies to
+    the actual matrix, so overlap reporting and subsetting never disagree.
+    """
     q, r = set(map(str, query_genes)), set(map(str, reference_genes))
     return {
         "n_query": len(q),
@@ -498,6 +504,69 @@ def gene_overlap(query_genes, reference_genes) -> dict[str, int]:
         "n_query_only": len(q - r),
         "n_reference_only": len(r - q),
     }
+
+
+def orient_bulk_genes_by_samples(
+    bulk_df: "pd.DataFrame", reference_genes
+) -> tuple["pd.DataFrame", dict[str, Any]]:
+    """Return *bulk_df* oriented as **genes × samples** with ``str`` gene index.
+
+    Detects which axis carries the genes by overlap with *reference_genes*
+    (comparison and the returned gene index are both coerced to ``str``, so a
+    numeric-looking gene index parsed as ``int`` by pandas still matches a
+    reference whose gene names are strings).
+
+    Rules — orientation is reported, never guessed silently:
+
+    * genes on the index  → returned as-is (index coerced to ``str``);
+    * genes on the columns → **transposed** to genes × samples;
+    * genes on *both* axes → ``ValueError`` (ambiguous);
+    * genes on *neither* axis → ``ValueError`` (no overlap).
+
+    Returns
+    -------
+    (oriented_df, info)
+        ``info`` carries ``orientation``, ``shape``, ``n_index_shared``,
+        ``n_col_shared``, and head label samples for logging.
+    """
+    ref = set(map(str, reference_genes))
+    idx_labels = [str(x) for x in bulk_df.index]
+    col_labels = [str(x) for x in bulk_df.columns]
+    n_index_shared = len(set(idx_labels) & ref)
+    n_col_shared = len(set(col_labels) & ref)
+
+    info: dict[str, Any] = {
+        "shape": tuple(bulk_df.shape),
+        "n_index_shared": n_index_shared,
+        "n_col_shared": n_col_shared,
+        "index_labels_head": idx_labels[:5],
+        "column_labels_head": col_labels[:5],
+    }
+
+    if n_index_shared > 0 and n_col_shared > 0:
+        info["orientation"] = "ambiguous"
+        raise ValueError(
+            "Ambiguous pseudobulk orientation: gene names overlap the reference "
+            f"on BOTH axes (index={n_index_shared}, columns={n_col_shared}).  "
+            "Provide a clearly genes×samples or samples×genes table."
+        )
+    if n_index_shared == 0 and n_col_shared == 0:
+        info["orientation"] = "none"
+        raise ValueError(
+            "No pseudobulk gene names match the reference on either axis "
+            f"(index head={idx_labels[:5]}, column head={col_labels[:5]}, "
+            f"reference head={sorted(ref)[:5]}).  Check gene naming conventions."
+        )
+
+    if n_index_shared > 0:
+        out = bulk_df.copy()
+        info["orientation"] = "genes_x_samples"
+    else:
+        out = bulk_df.T.copy()
+        info["orientation"] = "samples_x_genes (transposed to genes×samples)"
+
+    out.index = out.index.map(str)
+    return out, info
 
 
 # ---------------------------------------------------------------------------
