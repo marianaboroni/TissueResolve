@@ -1,0 +1,7 @@
+# Universal safe gene panel — conservative fallback when protocol is unknown
+# Genes that pass all protocol risk filters across common protocol combinations:
+#   - not intronic-dominant in snRNA-seq data
+#   - transcript length < 5000 bp
+#   - not in dissociation stress gene list
+#   - expressed across most bulk RNA-seq protocols
+# Populate by running: python scripts/build_gene_lists.py

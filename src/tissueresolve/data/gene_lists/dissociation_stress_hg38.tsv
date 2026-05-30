@@ -1,0 +1,31 @@
+# Placeholder gene list for CHIMERA v1
+# Replace with genes derived from the appropriate public source:
+#   intronic_dominant:    GTEx exon/intron split counts (Ivich & Greene 2026)
+#   dissociation_stress:  van den Brink et al. 2017 (Nat Methods) + Machado et al. 2021
+#   length_biased_3prime: hg38/mm10 gene length annotations (genes > 5000 bp, 3'-UMI capture)
+FOS
+FOSB
+JUN
+JUNB
+JUND
+ATF3
+DUSP1
+EGR1
+EGR2
+EGR3
+HSPA1A
+HSPA1B
+HSP90AA1
+DNAJB1
+SOCS3
+NR4A1
+NR4A2
+IER2
+BTG2
+RHOB
+PPP1R15A
+KLF6
+NFKBIA
+CXCL8
+HBEGF
+ZFP36

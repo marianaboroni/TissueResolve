@@ -1,0 +1,26 @@
+# Placeholder gene list for CHIMERA v1
+# Replace with genes derived from the appropriate public source:
+#   intronic_dominant:    GTEx exon/intron split counts (Ivich & Greene 2026)
+#   dissociation_stress:  van den Brink et al. 2017 (Nat Methods) + Machado et al. 2021
+#   length_biased_3prime: hg38/mm10 gene length annotations (genes > 5000 bp, 3'-UMI capture)
+# Format: one gene symbol per line, no header
+MALAT1
+NEAT1
+XIST
+MEG3
+KCNQ1OT1
+PVT1
+MIAT
+RPPH1
+SNHG1
+SNHG6
+SNHG12
+GAS5
+H19
+LINC00657
+LINC00152
+ZFAS1
+TUG1
+FIRRE
+MIR17HG
+NORAD

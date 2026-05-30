@@ -1,31 +1,67 @@
 """
-Protocol metadata and mismatch handling for TissueResolve.
+Protocol layer for TissueResolve.
 
-Two distinct protocol concepts are handled here — they must not be confused:
+Two conceptually distinct workflows live here.  They must not be confused.
 
-``metadata`` + ``risk``  (bulk)
-    Protocol *risk* — systematic gene-level biases introduced by mismatched
-    sequencing protocols (polyA bulk + snRNA reference, etc.).  Handled by
-    excluding or down-weighting biased genes from the panel before solving.
-    Uses curated gene lists in ``data/gene_lists/``.
+Bulk protocol risk  (``protocol.metadata`` + ``protocol.risk``)
+    Assesses gene-level biases introduced by mismatched sequencing protocols
+    between bulk RNA-seq and single-cell references.  Used **before** bulk
+    deconvolution to exclude or down-weight biased genes from the marker panel.
 
-``mismatch``  (spatial)
-    Protocol *mismatch* — per-gene multiplicative scale factors ``d_g``
-    estimated jointly with proportions during SpatCAR optimisation.  Accounts
-    for the systematic expression difference between Visium and the sc/snRNA
-    reference.
+    Key classes: :class:`ProtocolMetadata`, :class:`ProtocolRiskAssessor`,
+    :class:`ProtocolRiskReport`.
 
-Submodules (implemented in Stage 2):
+Spatial reference-query mismatch  (``protocol.mismatch``)
+    Estimates per-gene multiplicative scale factors ``d_g`` that correct for
+    the empirical expression difference between a Visium dataset and its
+    pseudo-bulk reference.  Estimated **during** spatial deconvolution.
 
-``metadata``
-    BulkProtocol, RefModality, RefCapture, RefCounting enums.
-    ProtocolMetadata dataclass.
-
-``risk``
-    ProtocolRiskAssessor, ProtocolRiskReport.
-    Computes per-gene risk scores from gene lists.
-
-``mismatch``
-    ProtocolMismatch, compute_discordance, update_mismatch_factors.
-    Spatial-only per-gene scale factor estimation.
+    Key classes: :class:`SpatialMismatch` (alias: :data:`ProtocolMismatch`),
+    :func:`compute_spatial_discordance`, :func:`update_mismatch_factors`.
 """
+# Metadata
+from tissueresolve.protocol.metadata import (
+    BulkProtocol,
+    ProtocolMetadata,
+    RefCapture,
+    RefCounting,
+    RefModality,
+    SpatialPlatform,
+)
+
+# Bulk risk
+from tissueresolve.protocol.risk import (
+    ProtocolRiskAssessor,
+    ProtocolRiskReport,
+    RISK_HARD_THRESHOLD,
+)
+
+# Spatial mismatch
+from tissueresolve.protocol.mismatch import (
+    ProtocolMismatch,
+    SpatialMismatch,
+    compute_discordance,
+    compute_spatial_discordance,
+    update_mismatch_factors,
+)
+
+__all__ = [
+    # metadata enums
+    "BulkProtocol",
+    "RefModality",
+    "RefCapture",
+    "RefCounting",
+    "SpatialPlatform",
+    # metadata container
+    "ProtocolMetadata",
+    # bulk risk
+    "ProtocolRiskAssessor",
+    "ProtocolRiskReport",
+    "RISK_HARD_THRESHOLD",
+    # spatial mismatch
+    "SpatialMismatch",
+    "ProtocolMismatch",
+    "compute_spatial_discordance",
+    "compute_discordance",
+    "update_mismatch_factors",
+]

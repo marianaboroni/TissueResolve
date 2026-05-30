@@ -293,6 +293,37 @@ class ReferenceSignature:
             )
 
     # ------------------------------------------------------------------
+    # Summary
+    # ------------------------------------------------------------------
+
+    def summary(self) -> pd.DataFrame:
+        """Return a per-cell-type summary of the reference profiles.
+
+        Returns
+        -------
+        pd.DataFrame
+            Index: cell-type names.
+            Columns: ``n_cells``, ``mean_cpm``, ``max_cpm``,
+            ``profile_entropy`` (Shannon entropy of the phi column —
+            lower = more concentrated marker profile).
+        """
+        R = self.as_R_cpm()   # (K, G)
+        phi = self.as_phi()   # (G, K)
+        rows = {}
+        for k, ct in enumerate(self.cell_types):
+            p_k = phi[:, k]
+            p_safe = np.maximum(p_k, 1e-12)
+            p_safe /= p_safe.sum()
+            entropy = float(-np.sum(p_safe * np.log(p_safe)))
+            rows[ct] = {
+                "n_cells": self.n_cells_per_type.get(ct, 0),
+                "mean_cpm": round(float(R[k].mean()), 4),
+                "max_cpm": round(float(R[k].max()), 4),
+                "profile_entropy": round(entropy, 4),
+            }
+        return pd.DataFrame(rows).T
+
+    # ------------------------------------------------------------------
     # Persistence
     # ------------------------------------------------------------------
 
@@ -951,6 +982,15 @@ class PairSeparability:
     def is_problematic(self) -> bool:
         """True when BC > 0.90."""
         return self.bhattacharyya_coeff > 0.90
+
+    @property
+    def discriminability_score(self) -> float:
+        """Separability score ∈ [0, 1].  Higher = more separable.
+
+        Defined as ``1 − bhattacharyya_coeff``.  Pairs with score < 0.10
+        are poorly separable; estimates for those types will be unreliable.
+        """
+        return max(0.0, 1.0 - self.bhattacharyya_coeff)
 
 
 @dataclass

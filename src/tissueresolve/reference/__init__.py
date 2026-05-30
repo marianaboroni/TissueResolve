@@ -1,23 +1,42 @@
 """
 Reference construction and gene selection for TissueResolve.
 
-Submodules (implemented in Stage 1):
+Public API
+----------
+``ReferenceBuilder``
+    Build a :class:`~tissueresolve.results.ReferenceSignature` from a count
+    matrix (DataFrame, AnnData, h5ad, or CSV/TSV).
 
-``build``
-    Unified ReferenceBuilder: donor-aware aggregation (from CHIMERA) +
-    batched streaming (from SpatCAR) + NB overdispersion estimation.
-    Produces ReferenceSignature with phi, R_cpm, phi_g, donor_cv.
+``GeneFilterSet``
+    Instance-based gene filter lists (intronic-dominant, dissociation-stress,
+    etc.).  No module-level mutable singletons.
 
-``markers``
-    GeneSelector: composite log-additive panel scoring (from CHIMERA) +
-    pairwise discriminability augmentation (from SpatCAR v1.1).
+``GeneSelector``, ``MarkerSelectionResult``
+    Composite marker gene selection combining CHIMERA-style scoring and
+    SpatCAR-style pairwise discriminability.
 
-``gene_filters``
-    Gene list loading for protocol-aware filtering (intronic-dominant,
-    dissociation-stress, length-biased, hypervariable, blacklist,
-    protein-coding).  Instance-based — no module-level singletons.
-
-``separability``
-    compute_separability, merge_nonseparable_types, SeparabilityReport.
-    Shared between bulk and spatial workflows.
+``compute_separability``, ``merge_nonseparable_types``, ``SeparabilityWarning``
+    Pairwise cell-type separability diagnostics (Bhattacharyya coefficient,
+    Jeffreys divergence, Pearson r).  The merge function includes the P0-3
+    dispersion bug fix from the SpatCAR legacy code.
 """
+from tissueresolve.reference.build import ReferenceBuilder
+from tissueresolve.reference.gene_filters import GeneFilterSet
+from tissueresolve.reference.markers import GeneSelector, MarkerSelectionResult
+from tissueresolve.reference.separability import (
+    SeparabilityWarning,
+    compute_separability,
+    merge_nonseparable_types,
+    separability_heatmap_data,
+)
+
+__all__ = [
+    "ReferenceBuilder",
+    "GeneFilterSet",
+    "GeneSelector",
+    "MarkerSelectionResult",
+    "SeparabilityWarning",
+    "compute_separability",
+    "merge_nonseparable_types",
+    "separability_heatmap_data",
+]
