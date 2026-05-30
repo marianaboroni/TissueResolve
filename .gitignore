@@ -34,3 +34,4 @@ examples/real_breast_cancer/outputs/
 *.loom
 *.mtx
 *.mtx.gz
+data/
