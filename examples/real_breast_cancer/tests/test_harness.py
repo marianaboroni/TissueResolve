@@ -153,6 +153,55 @@ def test_generate_pseudobulk_deterministic(harness, tiny_sc_adata):
     pd.testing.assert_frame_equal(a, b)
 
 
+def test_pseudobulk_tsv_is_valid_tab_separated(harness, tiny_sc_adata, tmp_path):
+    """Regression: the written TSV header is a single valid tab-separated row
+    with 12 distinct sample columns — hard_00 and hard_01 must NOT concatenate.
+    """
+    import re
+
+    counts, props, meta = harness.generate_pseudobulk(
+        tiny_sc_adata, "cell_type", n_per_regime=4, n_cells=50, seed=0
+    )
+    path = tmp_path / "pseudobulk_counts.tsv"
+    harness.write_tsv(
+        counts, path,
+        comment=["pseudobulk raw counts (genes × samples)", "seed: 0"],
+    )
+
+    # Reads cleanly with the exact canonical reader used by script 03.
+    df = pd.read_csv(path, sep="\t", comment="#", index_col=0)
+    assert df.shape[1] == 12
+    cols = list(df.columns)
+    assert "hard_00" in cols and "hard_01" in cols
+    assert "hard_00hard_01" not in cols
+    # No concatenated sample names anywhere: every column matches regime_NN.
+    assert all(re.fullmatch(r"(easy|medium|hard)_\d{2}", c) for c in cols), cols
+
+    # The raw (non-comment) header is one tab-separated row: gene + 12 samples.
+    header = next(ln for ln in path.read_text().splitlines()
+                  if not ln.startswith("#"))
+    assert header.count("\t") == 12
+    assert len(header.split("\t")) == 13
+
+
+def test_all_pseudobulk_files_read_with_canonical_reader(harness, tiny_sc_adata, tmp_path):
+    """All three derived files round-trip through pd.read_csv(sep='\\t', comment='#')."""
+    counts, props, meta = harness.generate_pseudobulk(
+        tiny_sc_adata, "cell_type", n_per_regime=4, n_cells=50, seed=0
+    )
+    files = {
+        "counts.tsv": (counts, ["genes × samples"]),
+        "props.tsv": (props, ["mRNA proportions"]),
+        "meta.tsv": (meta, ["per-sample metadata"]),
+    }
+    for name, (df, comment) in files.items():
+        p = tmp_path / name
+        harness.write_tsv(df, p, comment=comment)
+        back = pd.read_csv(p, sep="\t", comment="#", index_col=0)
+        assert back.shape[0] == df.shape[0]
+        assert back.shape[1] == df.shape[1]
+
+
 # ---------------------------------------------------------------------------
 # Metrics (hand-checked)
 # ---------------------------------------------------------------------------
@@ -189,6 +238,65 @@ def test_gene_overlap(harness):
     o = harness.gene_overlap(["g1", "g2", "g3"], ["g2", "g3", "g4"])
     assert o == {"n_query": 3, "n_reference": 3, "n_shared": 2,
                  "n_query_only": 1, "n_reference_only": 1}
+
+
+# ---------------------------------------------------------------------------
+# Bulk orientation / gene-name normalisation (regression for the 03 script bug)
+# ---------------------------------------------------------------------------
+
+
+def _bulk(genes, samples, *, genes_on="rows"):
+    data = np.arange(len(genes) * len(samples)).reshape(len(genes), len(samples))
+    df = pd.DataFrame(data, index=genes, columns=samples)
+    return df if genes_on == "rows" else df.T
+
+
+def test_orient_genes_on_rows_used_as_is(harness):
+    ref = ["g0", "g1", "g2", "g3"]
+    df = _bulk(["g0", "g1", "g2", "g3"], ["s0", "s1"], genes_on="rows")
+    out, info = harness.orient_bulk_genes_by_samples(df, ref)
+    assert info["orientation"] == "genes_x_samples"
+    assert list(out.index) == ref
+    assert out.shape == (4, 2)
+
+
+def test_orient_genes_on_columns_transposed(harness):
+    ref = ["g0", "g1", "g2", "g3"]
+    df = _bulk(["g0", "g1", "g2", "g3"], ["s0", "s1"], genes_on="cols")  # samples × genes
+    assert df.shape == (2, 4)
+    out, info = harness.orient_bulk_genes_by_samples(df, ref)
+    assert "transposed" in info["orientation"]
+    assert list(out.index) == ref
+    assert out.shape == (4, 2)
+
+
+def test_orient_integer_gene_index_coerced_to_str(harness):
+    # The real bug: reference gene names are str '4','9','12'; pandas parses
+    # the pseudobulk gene index as int 4,9,12.  Must still match.
+    ref = ["4", "9", "12"]
+    df = pd.DataFrame(np.ones((3, 2)), index=[4, 9, 12], columns=["s0", "s1"])
+    assert df.index.dtype.kind == "i"
+    out, info = harness.orient_bulk_genes_by_samples(df, ref)
+    assert info["orientation"] == "genes_x_samples"
+    assert list(out.index) == ["4", "9", "12"]
+    # Regression: the str overlap and the actual subsetting now agree.
+    ref_set = set(map(str, ref))
+    shared = [g for g in out.index if g in ref_set]
+    assert len(shared) == 3
+    assert harness.gene_overlap(out.index, ref)["n_shared"] == 3
+
+
+def test_orient_no_overlap_raises(harness):
+    df = _bulk(["x0", "x1"], ["s0", "s1"])
+    with pytest.raises(ValueError, match="No pseudobulk gene names match"):
+        harness.orient_bulk_genes_by_samples(df, ["g0", "g1"])
+
+
+def test_orient_ambiguous_both_axes_raises(harness):
+    # Both index and columns overlap the reference → ambiguous.
+    df = pd.DataFrame(np.ones((2, 2)), index=["g0", "g1"], columns=["g2", "g3"])
+    with pytest.raises(ValueError, match="Ambiguous"):
+        harness.orient_bulk_genes_by_samples(df, ["g0", "g1", "g2", "g3"])
 
 
 def test_align_proportions_no_overlap_raises(harness):
