@@ -278,6 +278,22 @@ def _install_one(tool: str) -> int:
                                stdout=fh, stderr=subprocess.STDOUT, timeout=1800)
         except Exception as exc:  # noqa: BLE001
             print(f"  install error: {exc}")
+    elif tool.lower() == "music":
+        rexpr = (
+            '.libPaths(c("benchmarks/envs/Rlib", .libPaths())); '
+            'options(repos="https://cloud.r-project.org"); '
+            'if(!requireNamespace("remotes",quietly=TRUE)) '
+            'install.packages("remotes", lib="benchmarks/envs/Rlib"); '
+            'if(!requireNamespace("MuSiC",quietly=TRUE)) '
+            'try(remotes::install_github("xuranw/MuSiC", lib="benchmarks/envs/Rlib", '
+            'upgrade="never", dependencies=TRUE)); '
+            'cat("installed=", requireNamespace("MuSiC",quietly=TRUE), "\\n")')
+        try:
+            with open(logf, "w") as fh:
+                subprocess.run(["Rscript", "-e", rexpr], cwd=str(REPO),
+                               stdout=fh, stderr=subprocess.STDOUT, timeout=2400)
+        except Exception as exc:  # noqa: BLE001
+            print(f"  install error: {exc}")
     else:
         print(f"  {tool}: per-tool install not scripted; see "
               "benchmarks/envs/install_external_tools.sh")
