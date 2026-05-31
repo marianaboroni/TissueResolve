@@ -87,7 +87,24 @@ python scripts/06_resolution_spillover_analysis.py --spillover-method expression
 
 # 7) (optional) Generate publication HTML reports + figures from existing outputs:
 python scripts/07_generate_reports.py
+
+# 8) (optional) Resolution recommendation + family-level predictions:
+python scripts/08_resolution_analysis.py
+#   apply merges (aggregate to families):
+python scripts/08_resolution_analysis.py --resolution-mode auto
 ```
+
+## Resolution recommendation (Stage 8)
+
+`scripts/08_resolution_analysis.py` turns the 32-fine-label separability problem
+into an actionable plan. It writes to `outputs/resolution/`:
+`recommended_merges.tsv`, `cell_type_families.tsv`, `pairwise_separability.tsv`,
+`unresolved_families.tsv`, `bulk_family_proportions.tsv`,
+`spatial_family_proportions.tsv`, `resolution_summary.md`, and
+`resolution_mapping.json`. Family-level proportions are **post-hoc**
+aggregations (fine estimates untouched, mass preserved); the mapping and merge
+stage are recorded. Run script 07 afterwards to surface recommended merges and
+family-level estimates in the HTML reports.
 
 ## Reports & figures (Stage 7)
 
@@ -101,7 +118,10 @@ no re-fit) and writes:
   barplot, Moran's I barplot, and — when array coordinates are available in the
   local Visium `.h5ad` — abundance maps, dominant-type map, per-spot pie charts;
   plus separability/spillover heatmaps);
-- `outputs/validation_summary/report.html` (combined).
+- `outputs/validation_summary/report.html` (combined landing page);
+- `outputs/validation_summary/methods.txt` with composed bulk/spatial methods text;
+- `outputs/validation_summary/warnings.json` and
+  `outputs/validation_summary/run_metadata.json` for bundle provenance.
 
 Figures are interactive Plotly HTML and each writes its `.data.tsv`. Install
 `pip install "tissueresolve[report]"` first; **static PDF/SVG/PNG require

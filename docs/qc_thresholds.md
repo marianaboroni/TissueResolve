@@ -72,6 +72,17 @@ uncertainty). It is configurable (`allow_unresolved`, default `True`) and
 **preserves total mass**. These are conservative defaults, not validated
 universal cut-offs.
 
+## Resolution recommendation system (Stage 8)
+
+When the reference has many poorly separable pairs, TissueResolve builds a
+**non-separable graph** (edge when `BC ≥ family_bc_threshold`, default 0.90),
+takes its connected components as candidate **merge families**, and names them
+with label heuristics (e.g. T/NK lymphocytes, myeloid cells, endothelial cells,
+epithelial cells, mural cells). It writes a machine-readable
+`recommended_merges.tsv` and a `cell_type_families.tsv`. The separability
+warning now points to this recommender and to `--resolution-mode` instead of
+telling users to "merge manually". Merging is always explicit and recorded.
+
 ## Using your own thresholds
 
 All thresholds live in `TissueResolveConfig` (`bulk_qc`, `spatial_qc`) and are

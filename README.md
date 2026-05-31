@@ -143,6 +143,27 @@ Reports surface all warnings (estimate type, low confidence, non-separability,
 spillover, non-convergence) and never hide failed checks. **Static export
 requires kaleido**; without it you still get interactive HTML and source data.
 
+## Resolution-aware handling of confusable cell types
+
+Fine cell-type panels contain pairs that aren't reliably separable. Instead of
+telling users to "merge manually", TissueResolve generates a **machine-readable
+recommendation**: it groups confusable types into named merge families
+(`recommended_merges.tsv`, `cell_type_families.tsv`) and can produce
+**family-level estimates** as a safer interpretation. Fine estimates are never
+overwritten and merging is always explicit and recorded.
+
+```python
+from tissueresolve.reference.resolution import (
+    recommend_cell_type_merges, assign_resolution_families)
+from tissueresolve.reference.hierarchy import aggregate_predictions_by_family
+mapping = assign_resolution_families(separability_report, cell_types)
+family_props = aggregate_predictions_by_family(fine_props, mapping)  # mass-preserving
+```
+
+`resolution_mode` (`none`/`suggest`/`auto`/`hierarchical`, default `suggest`)
+controls whether merges are only recommended or applied. See
+`docs/output_interpretation.md`.
+
 ## Architecture
 
 See `DESIGN_SPEC.md` for the full architecture specification and

@@ -37,6 +37,7 @@ OUT_REFERENCE_DIR = OUTPUTS_DIR / "reference"
 OUT_BULK_DIR = OUTPUTS_DIR / "bulk"
 OUT_SPATIAL_DIR = OUTPUTS_DIR / "spatial"
 OUT_SUMMARY_DIR = OUTPUTS_DIR / "validation_summary"
+OUT_RESOLUTION_DIR = OUTPUTS_DIR / "resolution"
 
 MANIFEST_PATH = DATA_DIR / "download_manifest.json"
 
@@ -52,6 +53,7 @@ PSEUDOBULK_META = DERIVED_DIR / "pseudobulk_metadata.tsv"
 ALL_DIRS = [
     REFERENCE_DATA_DIR, SPATIAL_DATA_DIR, DERIVED_DIR,
     OUT_REFERENCE_DIR, OUT_BULK_DIR, OUT_SPATIAL_DIR, OUT_SUMMARY_DIR,
+    OUT_RESOLUTION_DIR,
 ]
 
 # Candidate cell-type annotation columns, in priority order.

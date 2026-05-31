@@ -74,6 +74,26 @@ pretending otherwise.
   `conditional_subtype_proportions` (within a group), `absolute_subtype_proportions`
   (broad × conditional), and `unresolved_family_mass` (kept at the broad level).
 
+### Fine vs family-level estimates, and resolution modes
+
+- **Fine estimates** are per cell type (the deconvolver's raw output). **Family
+  estimates** sum confusable subtypes into a recommended family
+  (`recommended_merges.tsv`), giving a more reliable read when subtypes are not
+  separable. Fine estimates are **never overwritten** — family estimates are an
+  additional, safer interpretation.
+- **`resolution_mode`** (`ResolutionConfig`, and `--resolution-mode` in the
+  resolution analysis script) controls behaviour:
+  - `none` — report only (improved warning), estimates unchanged;
+  - `suggest` *(default)* — compute recommended merges, estimates unchanged;
+  - `auto` — aggregate to families;
+  - `hierarchical` — broad families first, subtypes only when resolvable.
+- **Post-hoc aggregation vs pre-deconvolution merging.** Post-hoc aggregation
+  (the default) deconvolves at fine resolution then sums subtype proportions
+  into families — mass-preserving and reversible. Pre-deconvolution merging
+  (`merge_reference_cell_types`) aggregates the *reference* before fitting.
+  Either way the merge mapping and stage are recorded; **merging is always
+  explicit, never silent.**
+
 **Why similar cell types may be reported as a family rather than split:** if the
 reference cannot separate two subtypes, a confident split would be fabricated
 precision. Reporting the family (or `unresolved_<family>`) is the honest result;

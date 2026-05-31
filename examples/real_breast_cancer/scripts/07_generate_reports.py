@@ -28,9 +28,9 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
-import sys
 import warnings as _warnings
 from pathlib import Path
+from types import SimpleNamespace
 
 import pandas as pd
 
@@ -60,6 +60,119 @@ def _load_reference():
     return None
 
 
+def _write_report_bundle_artifacts(
+    bulk_warns: list[str],
+    spatial_warns: list[str],
+    bulk_meta: dict[str, object],
+    spatial_meta: dict[str, object],
+) -> None:
+    from tissueresolve.report import methods_text
+    from tissueresolve.results import BulkDeconvResult, QCReport, SpatialDeconvResult
+
+    H.OUT_SUMMARY_DIR.mkdir(parents=True, exist_ok=True)
+    H.write_json({"bulk": bulk_warns, "spatial": spatial_warns},
+                 H.OUT_SUMMARY_DIR / "warnings.json")
+    run_metadata = {"generated_by": "07_generate_reports.py"}
+    if bulk_meta:
+        run_metadata["bulk"] = bulk_meta
+    if spatial_meta:
+        run_metadata["spatial"] = spatial_meta
+    H.write_json(run_metadata, H.OUT_SUMMARY_DIR / "run_metadata.json")
+
+    methods: list[str] = []
+    # Bulk methods text is inferred from the saved outputs.
+    try:
+        bulk_df = _read_tsv(H.OUT_BULK_DIR / "bulk_estimated_proportions.tsv")
+        bulk_qc = _read_tsv(H.OUT_BULK_DIR / "bulk_qc.tsv")
+        if bulk_df is not None:
+            recon_r2 = None
+            profile_corr = None
+            mismatch_flag = None
+            if bulk_qc is not None:
+                if "recon_r2" in bulk_qc.columns:
+                    recon_r2 = bulk_qc["recon_r2"]
+                if "profile_corr" in bulk_qc.columns:
+                    profile_corr = bulk_qc["profile_corr"]
+                if "mismatch_flag" in bulk_qc.columns:
+                    mismatch_flag = bulk_qc["mismatch_flag"]
+            qc = QCReport(
+                modality="bulk",
+                recommendations=[],
+                metadata={},
+                recon_r2=recon_r2,
+                profile_corr=profile_corr,
+                mismatch_flag=mismatch_flag,
+            )
+            coverage_r2 = recon_r2 if recon_r2 is not None else pd.Series(dtype=float)
+            deconv = BulkDeconvResult(
+                proportions=bulk_df,
+                coverage_r2=coverage_r2.reindex(bulk_df.index, fill_value=float("nan")),
+                gene_panel=list(bulk_df.columns),
+                gene_weights=None,
+                lower_ci=None,
+                upper_ci=None,
+                cell_fractions=None,
+                run_metadata={"generated_from": "saved TSV outputs"},
+            )
+            bulk_result = SimpleNamespace(
+                deconv=deconv,
+                qc=qc,
+                protocol_risk=None,
+                run_metadata={"generated_from": "07_generate_reports.py"},
+            )
+            methods.append(methods_text.compose_bulk_methods(bulk_result))
+    except Exception:
+        pass
+
+    try:
+        spatial_df = _read_tsv(H.OUT_SPATIAL_DIR / "spatial_spot_proportions.tsv")
+        spatial_qc = _read_tsv(H.OUT_SPATIAL_DIR / "spatial_qc.tsv")
+        morans_df = _read_tsv(H.OUT_SPATIAL_DIR / "morans_i.tsv")
+        morans_i = morans_df["morans_i"] if morans_df is not None else None
+        spatial_run_meta = {}
+        spatial_meta_path = H.OUT_SPATIAL_DIR / "spatial_run_metadata.json"
+        if spatial_meta_path.exists():
+            spatial_run_meta = json.loads(spatial_meta_path.read_text())
+        if spatial_df is not None:
+            qc = QCReport(
+                modality="spatial",
+                recommendations=[],
+                metadata={},
+                spot_qc=spatial_qc,
+                morans_i=morans_i,
+            )
+            deconv = SpatialDeconvResult(
+                proportions=spatial_df,
+                cell_types=list(spatial_df.columns),
+                marker_genes=[],
+                n_iter=int(spatial_run_meta.get("n_iter", 0)),
+                converged=bool(spatial_run_meta.get("converged", False)),
+                convergence_trace=[],
+                lambda_spatial=float(spatial_run_meta.get("lambda_spatial", 0.0)),
+                mismatch_factors=None,
+                lower_ci=None,
+                upper_ci=None,
+                bootstrap_coverage_note=None,
+                n_smooth=spatial_run_meta.get("n_smooth"),
+                run_metadata=spatial_run_meta,
+            )
+            spatial_result = SimpleNamespace(
+                deconv=deconv,
+                qc=qc,
+                morans_i=morans_i,
+                spot_qc=spatial_qc,
+                run_metadata=spatial_run_meta,
+            )
+            methods.append(methods_text.compose_spatial_methods(spatial_result))
+    except Exception:
+        pass
+
+    if methods:
+        (H.OUT_SUMMARY_DIR / "methods.txt").write_text(
+            "\n\n".join(methods), encoding="utf-8"
+        )
+
+
 def _separability_spillover_figs(ref, figdir: Path, prefix: str, warns: list):
     """Separability + spillover heatmaps from the reference (expression proxy)."""
     if ref is None:
@@ -85,14 +198,14 @@ def _separability_spillover_figs(ref, figdir: Path, prefix: str, warns: list):
         warns.append(f"separability/spillover figures skipped: {exc}")
 
 
-def generate_bulk_outputs(ref) -> Path:
+def generate_bulk_outputs(ref) -> tuple[Path, list[str], dict[str, object]]:
     from tissueresolve.plotting import bulk_plots
     from tissueresolve.report import generate_report
 
     rdir = H.OUT_BULK_DIR
     figdir = rdir / "figures"
     figdir.mkdir(parents=True, exist_ok=True)
-    warns: list = []
+    warns: list[str] = []
 
     props = _read_tsv(rdir / "bulk_estimated_proportions.tsv")
     qc = _read_tsv(rdir / "bulk_qc.tsv")
@@ -116,22 +229,24 @@ def generate_bulk_outputs(ref) -> Path:
         H.OUT_REFERENCE_DIR / "selected_gene_identifier_column.txt",
         H.OUT_RESOLUTION_DIR / "pairwise_resolvability.tsv",
         H.OUT_RESOLUTION_DIR / "spillover_risk_by_celltype.tsv",
+        H.OUT_RESOLUTION_DIR / "recommended_merges.tsv",
+        H.OUT_RESOLUTION_DIR / "bulk_family_proportions.tsv",
     ])
-    (rdir / "run_metadata.json").write_text(
-        json.dumps({"modality": "bulk", "n_samples":
-                    int(props.shape[0]) if props is not None else None},
-                   indent=2), encoding="utf-8")
-    return generate_report("bulk", rdir, rdir / "report.html", warnings=warns)
+    bulk_meta = {"modality": "bulk", "n_samples":
+                 int(props.shape[0]) if props is not None else None}
+    H.write_json(bulk_meta, rdir / "run_metadata.json")
+    out = generate_report("bulk", rdir, rdir / "report.html", warnings=warns)
+    return out, warns, bulk_meta
 
 
-def generate_spatial_outputs(ref) -> Path:
+def generate_spatial_outputs(ref) -> tuple[Path, list[str], dict[str, object]]:
     from tissueresolve.plotting import spatial_plots
     from tissueresolve.report import generate_report
 
     rdir = H.OUT_SPATIAL_DIR
     figdir = rdir / "figures"
     figdir.mkdir(parents=True, exist_ok=True)
-    warns: list = []
+    warns: list[str] = []
 
     props = _read_tsv(rdir / "spatial_spot_proportions.tsv")
     morans = _read_tsv(rdir / "morans_i.tsv")
@@ -167,16 +282,22 @@ def generate_spatial_outputs(ref) -> Path:
         H.OUT_REFERENCE_DIR / "cell_type_counts.tsv",
         H.OUT_REFERENCE_DIR / "selected_gene_identifier_column.txt",
         rdir / "spatial_run_metadata.json",
+        H.OUT_RESOLUTION_DIR / "pairwise_resolvability.tsv",
+        H.OUT_RESOLUTION_DIR / "spillover_risk_by_celltype.tsv",
+        H.OUT_RESOLUTION_DIR / "recommended_merges.tsv",
+        H.OUT_RESOLUTION_DIR / "spatial_family_proportions.tsv",
     ])
-    meta = {}
+    meta: dict[str, object] = {}
     mp = rdir / "spatial_run_metadata.json"
     if mp.exists():
         try:
             meta = json.loads(mp.read_text())
         except Exception:
             meta = {}
-    return generate_report("spatial", rdir, rdir / "report.html",
+    H.write_json(meta, rdir / "run_metadata.json")
+    out = generate_report("spatial", rdir, rdir / "report.html",
                            run_metadata=meta, warnings=warns)
+    return out, warns, meta
 
 
 def _spatial_coords(props):
@@ -222,14 +343,24 @@ def main(argv: list[str] | None = None) -> int:
     H.ensure_dirs()
     ref = _load_reference()
     generated = []
+    bulk_warns: list[str] = []
+    spatial_warns: list[str] = []
+    bulk_meta: dict[str, object] = {}
+    spatial_meta: dict[str, object] = {}
+
     if H.OUT_BULK_DIR.exists():
-        generated.append(generate_bulk_outputs(ref))
+        bulk_path, bulk_warns, bulk_meta = generate_bulk_outputs(ref)
+        generated.append(bulk_path)
     if H.OUT_SPATIAL_DIR.exists():
-        generated.append(generate_spatial_outputs(ref))
+        spatial_path, spatial_warns, spatial_meta = generate_spatial_outputs(ref)
+        generated.append(spatial_path)
     generated.append(generate_combined_report())
+    _write_report_bundle_artifacts(bulk_warns, spatial_warns, bulk_meta, spatial_meta)
+
     print("Generated reports:")
     for p in generated:
         print(f"  {p}")
+    print(f"Bundle metadata: {H.OUT_SUMMARY_DIR / 'warnings.json'}, {H.OUT_SUMMARY_DIR / 'run_metadata.json'}")
     return 0
 
 

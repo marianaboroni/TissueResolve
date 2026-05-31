@@ -137,20 +137,34 @@ def compute_separability(
 
     problematic = [p for p in pairs if p.bhattacharyya_coeff > warn_threshold]
     if problematic:
+        n_crit = sum(1 for p in problematic if p.bhattacharyya_coeff > 0.97)
+        n_high = len(problematic) - n_crit
+        worst = sorted(problematic, key=lambda p: -p.bhattacharyya_coeff)[:5]
+        top_lines = "\n".join(
+            f"  {p.type_a!r} vs {p.type_b!r}: "
+            f"BC={p.bhattacharyya_coeff:.4f}, "
+            f"separability_score={p.discriminability_score:.4f}, "
+            f"J={p.jeffreys_divergence:.3f}, "
+            f"{p.n_discriminating_genes} discriminating genes"
+            for p in worst
+        )
+        more = (f"\n  … and {len(problematic) - len(worst)} more pair(s)."
+                if len(problematic) > len(worst) else "")
         msg = (
             f"Reference contains {len(problematic)} poorly separable cell-type "
-            f"pair(s) (BC > {warn_threshold}).  "
-            "Deconvolution proportions for these types will be unreliable.\n"
-            + "\n".join(
-                f"  {p.type_a!r} vs {p.type_b!r}: "
-                f"BC={p.bhattacharyya_coeff:.4f}, "
-                f"separability_score={p.discriminability_score:.4f}, "
-                f"J={p.jeffreys_divergence:.3f}, "
-                f"{p.n_discriminating_genes} discriminating genes"
-                for p in problematic
-            )
-            + "\n\nConsider calling merge_nonseparable_types() or merging "
-            "these types manually before deconvolution."
+            f"pair(s) (BC > {warn_threshold}): {n_crit} CRITICAL (BC>0.97), "
+            f"{n_high} HIGH.  Subtype-level proportions for these types may be "
+            "unreliable.\nTop pairs:\n" + top_lines + more
+            + "\n\nRecommended action — use the resolution-aware recommender for a "
+            "machine-readable merge plan instead of merging by hand:\n"
+            "  from tissueresolve.reference.resolution import (\n"
+            "      build_resolution_report, recommend_cell_type_merges,\n"
+            "      assign_resolution_families, write_recommended_merges)\n"
+            "It writes recommended_merges.tsv / cell_type_families.tsv under the "
+            "run's resolution/ outputs, or run the analysis with "
+            "--resolution-mode {suggest|auto|hierarchical}.\n"
+            "Consider interpreting confusable types at the family level rather "
+            "than as confident subtypes."
         )
         warnings.warn(msg, SeparabilityWarning, stacklevel=2)
         logger.warning("SEPARABILITY WARNING:\n%s", msg)

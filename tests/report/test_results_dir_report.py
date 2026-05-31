@@ -98,3 +98,22 @@ def test_report_offline(monkeypatch, tmp_path):
 def test_generate_report_bad_modality(tmp_path):
     with pytest.raises(ValueError):
         generate_report("nonsense", str(tmp_path))
+
+
+def test_report_surfaces_recommended_merges_and_families(tmp_path):
+    rdir = _make_bulk_results(tmp_path)
+    tables = rdir / "tables"
+    pd.DataFrame({
+        "family_name": ["T/NK lymphocytes"], "members": ["CD4 T cell; CD8 T cell"],
+        "n_members": [2], "resolvability": ["unresolved"],
+        "mean_separability": [0.05], "recommended_merge": [True],
+    }).to_csv(tables / "recommended_merges.tsv", sep="\t", index=False)
+    pd.DataFrame(np.eye(2), index=["s0", "s1"],
+                 columns=["T/NK lymphocytes", "Myeloid"]).to_csv(
+        rdir / "bulk_family_proportions.tsv", sep="\t")
+    doc = generate_report("bulk", rdir, rdir / "report.html").read_text()
+    assert "Recommended merge families" in doc
+    assert "Family-level estimates" in doc
+    assert "T/NK lymphocytes" in doc
+    # banner warning about confusable types
+    assert "recommended merge family" in doc.lower()

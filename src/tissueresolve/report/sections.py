@@ -68,7 +68,10 @@ def bulk_sections(results_dir: Path, *, run_metadata: Optional[dict] = None,
                             "pairwise_resolvability.tsv")
     spill = assets.find_table(results_dir, "spillover_report.tsv",
                               "spillover_risk_by_celltype.tsv")
+    merges = assets.find_table(results_dir, "recommended_merges.tsv")
+    family = assets.find_table(results_dir, "bulk_family_proportions.tsv")
     warns = list(warnings or []) + assets.collect_warnings(results_dir)
+    warns = _resolution_banner(sep, merges) + warns
 
     n_samples = props.shape[0] if props is not None else "?"
     n_types = props.shape[1] if props is not None else "?"
@@ -99,11 +102,16 @@ def bulk_sections(results_dir: Path, *, run_metadata: Optional[dict] = None,
                  _fig(figs, "bulk_uncertainty_plot", "Uncertainty (bootstrap CIs)",
                       "Wide intervals → low-confidence estimates.")))
     secs.append(("Separability and spillover",
-                 (T.df_table(sep, max_rows=20) if sep is not None else "")
+                 _resolution_intro(merges)
+                 + (T.df_table(sep, max_rows=20) if sep is not None else "")
                  + _fig(figs, "bulk_separability_heatmap", "Separability heatmap")
                  + (T.df_table(spill, max_rows=20) if spill is not None else "")
                  + _fig(figs, "bulk_spillover_heatmap", "Spillover heatmap")
-                 + _fig(figs, "spillover_network", "Spillover network")))
+                 + _fig(figs, "spillover_network", "Spillover network")
+                 + (f"<h3>Recommended merge families</h3>{T.df_table(merges, max_rows=40)}"
+                    if merges is not None else "")
+                 + (f"<h3>Family-level estimates (safer interpretation)</h3>"
+                    f"{T.df_table(family)}" if family is not None else "")))
     secs.append(("Warnings and limitations", T.warning_box(warns)))
     secs.append(("Methods", _methods_html(results_dir, "bulk")))
     secs.append(("Output files", T.file_list(_output_files(results_dir))))
@@ -122,7 +130,10 @@ def spatial_sections(results_dir: Path, *, run_metadata: Optional[dict] = None,
                             "pairwise_resolvability.tsv")
     spill = assets.find_table(results_dir, "spillover_report.tsv",
                               "spillover_risk_by_celltype.tsv")
+    merges = assets.find_table(results_dir, "recommended_merges.tsv")
+    family = assets.find_table(results_dir, "spatial_family_proportions.tsv")
     warns = list(warnings or []) + assets.collect_warnings(results_dir)
+    warns = _resolution_banner(sep, merges) + warns
 
     n_spots = props.shape[0] if props is not None else "?"
     n_types = props.shape[1] if props is not None else "?"
@@ -153,14 +164,50 @@ def spatial_sections(results_dir: Path, *, run_metadata: Optional[dict] = None,
                  (T.df_table(morans) if morans is not None else "")
                  + _fig(figs, "spatial_morans_i_barplot", "Moran's I by cell type")))
     secs.append(("Separability and spillover",
-                 (T.df_table(sep, max_rows=20) if sep is not None else "")
+                 _resolution_intro(merges)
+                 + (T.df_table(sep, max_rows=20) if sep is not None else "")
                  + _fig(figs, "spatial_separability_heatmap", "Separability heatmap")
                  + (T.df_table(spill, max_rows=20) if spill is not None else "")
-                 + _fig(figs, "spatial_spillover_heatmap", "Spillover heatmap")))
+                 + _fig(figs, "spatial_spillover_heatmap", "Spillover heatmap")
+                 + (f"<h3>Recommended merge families</h3>{T.df_table(merges, max_rows=40)}"
+                    if merges is not None else "")
+                 + (f"<h3>Family-level estimates (safer interpretation)</h3>"
+                    f"{T.df_table(family)}" if family is not None else "")))
     secs.append(("Warnings and limitations", T.warning_box(warns)))
     secs.append(("Methods", _methods_html(results_dir, "spatial")))
     secs.append(("Output files", T.file_list(_output_files(results_dir))))
     return secs
+
+
+def _resolution_banner(sep, merges) -> list:
+    """A prominent warning when many HIGH/CRITICAL pairs / merges are recommended."""
+    banners: list = []
+    n_problem = 0
+    if sep is not None and "resolvability" in sep.columns:
+        n_problem = int(sep["resolvability"].isin(
+            ["poorly_resolved", "unresolved"]).sum())
+    if merges is not None and len(merges) > 0:
+        n_problem = max(n_problem, int(merges["n_members"].sum()))
+        banners.append(
+            f"Many fine cell types are confusable: {len(merges)} recommended "
+            "merge family(ies). Subtype-level estimates may be unreliable — "
+            "consider the family-level estimates and see recommended_merges.tsv.")
+    elif n_problem > 0:
+        banners.append(
+            f"{n_problem} poorly/unresolved cell-type pair(s) detected; "
+            "subtype-level estimates may be unreliable.")
+    return banners
+
+
+def _resolution_intro(merges) -> str:
+    if merges is not None and len(merges) > 0:
+        return ("<p class='caption'>Fine cell-type labels can be confusable. "
+                "Pairs below the separability threshold are grouped into merge "
+                "families; subtype-level estimates for them may be unreliable, so "
+                "family-level estimates are provided as a safer interpretation. "
+                "Merging is explicit and recorded (recommended_merges.tsv) — "
+                "TissueResolve never merges cell types silently.</p>")
+    return ""
 
 
 def _methods_html(results_dir: Path, modality: str) -> str:
