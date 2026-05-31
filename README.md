@@ -138,10 +138,20 @@ tissueresolve report --modality bulk --results-dir results/bulk
 ```
 
 In Python: `from tissueresolve.report import generate_report` and
-`tissueresolve.plotting.{bulk_plots,spatial_plots,separability_plots,spillover_plots}`.
-Reports surface all warnings (estimate type, low confidence, non-separability,
-spillover, non-convergence) and never hide failed checks. **Static export
-requires kaleido**; without it you still get interactive HTML and source data.
+`tissueresolve.plotting.{bulk_plots,spatial_plots,separability_plots,spillover_plots,summary_figures,histology}`.
+
+Reports lead with an **executive summary** (cards + a generated paragraph),
+**key findings**, and a single **main publication figure** (`*_main_summary_figure`),
+followed by automatic interpretation. Raw matrices/tables are collapsed into
+"Detailed outputs". A **family-aware palette** keeps each cell type the same
+colour across all figures (saved to `figures/cell_type_color_map.tsv`); main
+figures show top types + "Other". Spatial reports overlay predictions on the
+**H&E image** when available. Warnings are **severity-ranked**
+(INFO/CAUTION/WARNING/CRITICAL) and the report never says "No warnings" when
+separability, spillover, missing bootstrap, low overlap, or H&E/convergence
+issues exist. **Static export requires kaleido**; without it you still get
+interactive HTML and source data, and missing bootstrap shows a message card
+rather than an empty plot. See `docs/output_interpretation.md`.
 
 ## Resolution-aware handling of confusable cell types
 

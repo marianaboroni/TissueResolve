@@ -198,8 +198,40 @@ def _separability_spillover_figs(ref, figdir: Path, prefix: str, warns: list):
         warns.append(f"separability/spillover figures skipped: {exc}")
 
 
+def _reference_family_counts(ref):
+    from tissueresolve.plotting.palette import infer_cell_type_family
+
+    if ref is None or not getattr(ref, "n_cells_per_type", None):
+        return None
+    fam: dict[str, int] = {}
+    for ct, n in ref.n_cells_per_type.items():
+        f = infer_cell_type_family(ct)
+        fam[f] = fam.get(f, 0) + int(n)
+    return pd.Series(fam) if fam else None
+
+
+def _read_pairs(path: Path):
+    try:
+        df = pd.read_csv(path, sep="\t", comment="#")
+        if {"type_a", "type_b"}.issubset(df.columns):
+            return df
+    except Exception:
+        pass
+    return None
+
+
+def _color_map_and_save(props, figdir: Path):
+    from tissueresolve.plotting.palette import assign_family_palette, save_color_map
+
+    cols = list(props.columns) + ["Other"] if props is not None else ["Other"]
+    cmap = assign_family_palette(cols)
+    save_color_map(cmap, figdir)
+    return cmap
+
+
 def generate_bulk_outputs(ref) -> tuple[Path, list[str], dict[str, object]]:
     from tissueresolve.plotting import bulk_plots
+    from tissueresolve.plotting.summary_figures import bulk_main_summary_figure
     from tissueresolve.report import generate_report
 
     rdir = H.OUT_BULK_DIR
@@ -221,6 +253,16 @@ def generate_bulk_outputs(ref) -> tuple[Path, list[str], dict[str, object]]:
             bulk_plots.plot_bulk_qc_summary(qc, figdir)
         except Exception as exc:
             warns.append(f"bulk QC figure skipped: {exc}")
+    # Main publication summary figure + stable family palette.
+    if props is not None:
+        try:
+            cmap = _color_map_and_save(props, figdir)
+            bulk_main_summary_figure(
+                props, figdir, reference_family_counts=_reference_family_counts(ref),
+                top_pairs=_read_pairs(H.OUT_RESOLUTION_DIR / "pairwise_resolvability.tsv"),
+                color_map=cmap)
+        except Exception as exc:
+            warns.append(f"bulk main summary figure skipped: {exc}")
     _separability_spillover_figs(ref, figdir, "bulk", warns)
 
     _copy_into_tables(rdir, [
@@ -232,8 +274,10 @@ def generate_bulk_outputs(ref) -> tuple[Path, list[str], dict[str, object]]:
         H.OUT_RESOLUTION_DIR / "recommended_merges.tsv",
         H.OUT_RESOLUTION_DIR / "bulk_family_proportions.tsv",
     ])
-    bulk_meta = {"modality": "bulk", "n_samples":
-                 int(props.shape[0]) if props is not None else None}
+    from tissueresolve.plotting.export import kaleido_available
+    bulk_meta = {"modality": "bulk",
+                 "n_samples": int(props.shape[0]) if props is not None else None,
+                 "static_export": bool(kaleido_available())}
     H.write_json(bulk_meta, rdir / "run_metadata.json")
     out = generate_report("bulk", rdir, rdir / "report.html", warnings=warns)
     return out, warns, bulk_meta
@@ -276,6 +320,26 @@ def generate_spatial_outputs(ref) -> tuple[Path, list[str], dict[str, object]]:
         warns.append("spatial array coordinates unavailable; coordinate maps "
                      "(abundance/dominant/pie) were skipped.")
 
+    # Main publication summary figure + family palette.
+    has_he = False
+    if props is not None:
+        try:
+            cmap = _color_map_and_save(props, figdir)
+            from tissueresolve.plotting.summary_figures import spatial_main_summary_figure
+            coords_df = (pd.DataFrame({"array_row": coords[0], "array_col": coords[1]},
+                                      index=props.index) if coords is not None else None)
+            spatial_main_summary_figure(
+                props, figdir, coords=coords_df,
+                morans=morans["morans_i"] if morans is not None else None,
+                reference_family_counts=_reference_family_counts(ref), color_map=cmap)
+        except Exception as exc:
+            warns.append(f"spatial main summary figure skipped: {exc}")
+        # H&E overlays (from the local Visium .h5ad if present).
+        try:
+            has_he = _he_overlays(props, figdir, cmap, warns)
+        except Exception as exc:
+            warns.append(f"H&E overlays skipped: {exc}")
+
     _separability_spillover_figs(ref, figdir, "spatial", warns)
     _copy_into_tables(rdir, [
         H.OUT_REFERENCE_DIR / "reference_summary.tsv",
@@ -294,10 +358,46 @@ def generate_spatial_outputs(ref) -> tuple[Path, list[str], dict[str, object]]:
             meta = json.loads(mp.read_text())
         except Exception:
             meta = {}
+    from tissueresolve.plotting.export import kaleido_available
+    meta["has_he_image"] = bool(has_he)
+    meta["static_export"] = bool(kaleido_available())
     H.write_json(meta, rdir / "run_metadata.json")
     out = generate_report("spatial", rdir, rdir / "report.html",
                            run_metadata=meta, warnings=warns)
     return out, warns, meta
+
+
+def _he_overlays(props, figdir: Path, cmap: dict, warns: list) -> bool:
+    """Generate H&E overlays from the local Visium .h5ad; returns has_image."""
+    if not H.SPATIAL_H5AD.exists():
+        warns.append("Visium .h5ad not present; H&E overlays skipped "
+                     "(coordinate maps used instead).")
+        return False
+    import anndata as ad
+
+    from tissueresolve.plotting.histology import (
+        extract_visium_coordinates, load_visium_histology_image,
+        plot_abundance_on_he, plot_dominant_cell_type_on_he, plot_he_with_spots)
+
+    adata = ad.read_h5ad(H.SPATIAL_H5AD)
+    image, sf, w = load_visium_histology_image(adata)
+    warns.extend(w)
+    coords = extract_visium_coordinates(adata, scalefactors=sf)
+    coords = coords.set_index("spot")
+    common = [s for s in props.index if s in coords.index]
+    if not common:
+        warns.append("No spot-id overlap between Visium image coords and "
+                     "predictions; H&E overlays skipped.")
+        return False
+    coords_he = coords.loc[common].reset_index()
+    props_he = props.loc[common]
+    plot_he_with_spots(image, coords_he, figdir, name="he_spots_check")
+    plot_dominant_cell_type_on_he(image, coords_he, props_he, cmap, figdir,
+                                  name="he_dominant_cell_type")
+    for ct in props_he.mean(0).sort_values(ascending=False).index[:3]:
+        plot_abundance_on_he(image, coords_he, props_he[ct], figdir,
+                             cell_type=str(ct))
+    return image is not None
 
 
 def _spatial_coords(props):

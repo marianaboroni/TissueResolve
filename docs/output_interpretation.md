@@ -107,6 +107,33 @@ augmentation if subtype resolution is required.
 - Poorly separable cell-type pairs (high Bhattacharyya coefficient) produce
   warnings, and estimates for those types should be treated as unreliable.
 
+## Publication figures vs exploratory figures
+
+- The **main publication figure** (`bulk_main_summary_figure` /
+  `spatial_main_summary_figure`) is one clean multi-panel summary: workflow,
+  reference composition, predicted composition (top types + "Other"),
+  validation/QC or Moran's I, and a separability summary. It leads the report.
+- **Exploratory figures** (e.g. per-spot pie overlays) are clearly labelled
+  "Exploratory, not a primary publication figure" and are capped/down-sampled
+  for performance.
+- A **family-aware palette** keeps the same cell type the same colour across
+  every figure: epithelial=blues, stromal=oranges, endothelial=teals,
+  myeloid=greens, T/NK=purples, B/plasma=reds, mural=olive, adipocyte=gold,
+  "Other"=light grey, family-level/unresolved=dark grey. The mapping is saved
+  to `figures/cell_type_color_map.tsv`. Main figures show **top cell types +
+  "Other"** rather than all fine types; full matrices live in collapsible
+  "Detailed outputs".
+- **H&E overlay** (spatial): when the Visium image is present, spots/predictions
+  are overlaid on the tissue image (dominant type, abundance). Without it,
+  coordinate-only maps are used and a warning is recorded; any axis inversion
+  is recorded in the figure's source-data metadata, never applied silently.
+- **Clustered bulk composition barplot**: samples ordered by hierarchical
+  clustering of predicted composition (method recorded in the caption).
+- **Average spatial composition** and **Moran's I** summarise tissue-wide
+  composition and which populations are most spatially structured.
+- **Bootstrap uncertainty**: if not computed, the report shows a message card
+  ("run with `--n-bootstrap > 0`"), not a meaningless empty plot.
+
 ## Reports and figures
 
 - **Every figure** produced by `tissueresolve.plotting` saves its underlying

@@ -130,6 +130,19 @@ warning is recorded. Bulk values are mRNA-derived proportions (not cell
 fractions) and spatial values are spot-level RNA-derived composition (not cell
 counts); reports surface all separability/spillover/uncertainty warnings.
 
+The redesigned report leads with an **executive summary**, **key findings**, a
+single **main publication figure** (`bulk_main_summary_figure` /
+`spatial_main_summary_figure`), and automatic interpretation; raw 32×32
+matrices and full tables are collapsed into "Detailed outputs". Colours follow
+a **family-aware palette** (saved to `figures/cell_type_color_map.tsv`) so the
+same cell type is the same colour everywhere, and main figures show the top
+cell types + "Other" instead of all 32 fine labels. When the Visium **H&E
+image** is present in the local `.h5ad`, spatial predictions are overlaid on it
+(`he_dominant_cell_type`, `he_abundance_*`, `he_spots_check`); otherwise
+coordinate-only maps are used and a warning is recorded. The per-spot pie
+overlay is labelled **exploratory**. Bootstrap uncertainty, if not computed,
+appears as a message card (run with `--n-bootstrap > 0`).
+
 ## Resolution & spillover (Stage 6)
 
 The breast-cancer reference has 32 fine cell types with many poorly separable

@@ -358,8 +358,9 @@ def plot_spatial_spot_pie_charts(
             marker={"colors": colours}, showlegend=bool(s == idx[0]),
             domain={"x": [max(0, xn[s] - half), min(1, xn[s] + half)],
                     "y": [max(0, yn[s] - half), min(1, yn[s] + half)]}))
-    fig.update_layout(**plotly_layout("Per-spot composition (pie charts)",
-                                      subtitle=_SP_SUB, height=620))
+    fig.update_layout(**plotly_layout(
+        "Per-spot composition (pie charts) — Exploratory, not a primary "
+        "publication figure", subtitle=_SP_SUB, height=620))
 
     long = []
     for s in idx:
@@ -369,7 +370,8 @@ def plot_spatial_spot_pie_charts(
                          "cell_type": ct, "fraction": float(props.iloc[int(s)][ct])})
     res = export_figure(fig, output_dir, name,
                         data={"data": pd.DataFrame(long)},
-                        caption="Per-spot RNA-derived composition. " + _SP_SUB,
+                        caption="Exploratory, not a primary publication figure. "
+                                "Per-spot RNA-derived composition. " + _SP_SUB,
                         data_comment=["estimate_type: spot_rna_composition"],
                         formats=())  # static export of many pies is not meaningful
     res.warnings.extend(warns)
