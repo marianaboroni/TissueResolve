@@ -70,10 +70,25 @@ class TestSpatialInfo:
 
 
 class TestSpatialReport:
-    def test_report_not_implemented_exits_2(self):
-        result = CliRunner().invoke(cli, ["spatial", "report"])
-        assert result.exit_code == 2
-        assert "not yet implemented" in result.output
+    def test_report_help(self):
+        # The spatial report command is now implemented (publication layer):
+        # it builds an HTML report from a results directory.
+        result = CliRunner().invoke(cli, ["spatial", "report", "--help"])
+        assert result.exit_code == 0
+        assert "--results-dir" in result.output
+
+    def test_report_runs_on_results_dir(self, tmp_path):
+        import numpy as np
+        import pandas as pd
+
+        rdir = tmp_path / "spatial"
+        rdir.mkdir()
+        pd.DataFrame(np.eye(2), index=["sp0", "sp1"], columns=["A", "B"]).to_csv(
+            rdir / "spatial_spot_proportions.tsv", sep="\t")
+        result = CliRunner().invoke(
+            cli, ["spatial", "report", "--results-dir", str(rdir)])
+        assert result.exit_code == 0, result.output
+        assert (rdir / "report.html").exists()
 
 
 # ---------------------------------------------------------------------------

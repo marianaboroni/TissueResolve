@@ -44,6 +44,11 @@ spatial = [
 ]
 report = [
     "jinja2>=3.1",
+    "plotly>=5.18",
+    # kaleido enables static (PDF/SVG/PNG) export from Plotly figures.
+    # Optional: without it, interactive HTML + source data are still written
+    # and a clear warning is recorded.
+    "kaleido>=0.2",
 ]
 plots = [
     "matplotlib>=3.7",

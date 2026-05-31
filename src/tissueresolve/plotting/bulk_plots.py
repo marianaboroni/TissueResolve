@@ -250,3 +250,198 @@ def marker_recall_plot(
 
     fig_paths, data_paths = save_outputs(fig, table, output_dir, name)
     return PlotResult(figure=fig, figure_paths=fig_paths, data_paths=data_paths)
+
+
+# ===========================================================================
+# Publication layer (Plotly) — interactive HTML + static + source data
+# ===========================================================================
+
+from tissueresolve.plotting import captions as _captions  # noqa: E402
+from tissueresolve.plotting.export import FigureResult, export_figure, require_plotly  # noqa: E402
+from tissueresolve.plotting.style import (  # noqa: E402
+    ESTIMATE_SUBTITLE,
+    color_sequence,
+    plotly_layout,
+)
+
+_BULK_SUB = ESTIMATE_SUBTITLE["bulk"]
+
+
+def _cluster_order(matrix: np.ndarray) -> list[int]:
+    """Hierarchical-clustering leaf order for rows of *matrix* (offline, scipy)."""
+    n = matrix.shape[0]
+    if n < 3:
+        return list(range(n))
+    try:
+        from scipy.cluster.hierarchy import leaves_list, linkage
+
+        Z = linkage(matrix, method="average", metric="euclidean")
+        return list(leaves_list(Z))
+    except Exception:
+        return list(range(n))
+
+
+def _collapse_to_top_n(props: pd.DataFrame, top_n: Optional[int]) -> pd.DataFrame:
+    """Keep the *top_n* cell types by mean proportion; sum the rest into 'Other'."""
+    if not top_n or top_n >= props.shape[1]:
+        return props
+    order = props.mean(axis=0).sort_values(ascending=False).index.tolist()
+    keep = order[:top_n]
+    other = [c for c in props.columns if c not in keep]
+    out = props[keep].copy()
+    if other:
+        out["Other"] = props[other].sum(axis=1)
+    return out
+
+
+def plot_bulk_composition_clustered_barplot(
+    proportions: pd.DataFrame,
+    output_dir,
+    *,
+    name: str = "bulk_composition_clustered_barplot",
+    top_n: Optional[int] = None,
+    cluster_samples: bool = True,
+    cluster_cell_types: bool = True,
+    sample_metadata: Optional[pd.DataFrame] = None,
+) -> FigureResult:
+    """Clustered stacked bar of bulk mRNA-derived composition (samples × types).
+
+    Samples are ordered by hierarchical clustering of their composition; cell
+    types optionally clustered too; rare types optionally collapsed into
+    'Other'.  Saves the plotted matrix plus sample and cell-type orders.
+    """
+    go = require_plotly()
+    props = _collapse_to_top_n(proportions.fillna(0.0), top_n)
+
+    sample_order = (_cluster_order(props.to_numpy()) if cluster_samples
+                    else list(range(props.shape[0])))
+    samples = [props.index[i] for i in sample_order]
+    if cluster_cell_types and props.shape[1] >= 3:
+        ct_order = _cluster_order(props.to_numpy().T)
+        cell_types = [props.columns[i] for i in ct_order]
+    else:
+        cell_types = list(props.columns)
+
+    ordered = props.loc[samples, cell_types]
+    colours = color_sequence(len(cell_types))
+
+    fig = go.Figure()
+    for j, ct in enumerate(cell_types):
+        fig.add_bar(x=[str(s) for s in samples], y=ordered[ct].to_numpy(),
+                    name=str(ct), marker_color=colours[j])
+    fig.update_layout(barmode="stack",
+                      **plotly_layout("Bulk cell-type composition (clustered)",
+                                      subtitle=_BULK_SUB,
+                                      height=520))
+    fig.update_yaxes(title_text="mRNA-derived proportion", range=[0, 1])
+    fig.update_xaxes(title_text="sample (clustered order)", tickangle=90)
+
+    data = {
+        "data": ordered,
+        "sample_order": pd.DataFrame({"order": range(len(samples)),
+                                      "sample": [str(s) for s in samples]}),
+        "cell_type_order": pd.DataFrame({"order": range(len(cell_types)),
+                                         "cell_type": [str(c) for c in cell_types]}),
+    }
+    caption = _captions.bulk_composition_caption(props.shape[0], proportions.shape[1])
+    return export_figure(fig, output_dir, name, data=data, caption=caption,
+                         data_comment=["estimate_type: mRNA_proportion (NOT cell fractions)"])
+
+
+def plot_bulk_composition_heatmap(
+    proportions: pd.DataFrame,
+    output_dir,
+    *,
+    name: str = "bulk_composition_heatmap",
+    cluster_samples: bool = True,
+    cluster_cell_types: bool = True,
+) -> FigureResult:
+    """Clustered heatmap of bulk composition — useful for many cell types."""
+    go = require_plotly()
+    props = proportions.fillna(0.0)
+    s_order = (_cluster_order(props.to_numpy()) if cluster_samples
+               else list(range(props.shape[0])))
+    c_order = (_cluster_order(props.to_numpy().T)
+               if cluster_cell_types and props.shape[1] >= 3
+               else list(range(props.shape[1])))
+    samples = [props.index[i] for i in s_order]
+    cell_types = [props.columns[i] for i in c_order]
+    ordered = props.loc[samples, cell_types]
+
+    fig = go.Figure(go.Heatmap(
+        z=ordered.to_numpy(), x=[str(c) for c in cell_types],
+        y=[str(s) for s in samples], colorscale="Viridis", zmin=0, zmax=1,
+        colorbar={"title": "proportion"}))
+    fig.update_layout(**plotly_layout("Bulk composition heatmap (clustered)",
+                                      subtitle=_BULK_SUB, height=560))
+    fig.update_xaxes(tickangle=90)
+    return export_figure(fig, output_dir, name, data={"data": ordered},
+                         caption=_captions.bulk_composition_caption(
+                             props.shape[0], props.shape[1]),
+                         data_comment=["estimate_type: mRNA_proportion"])
+
+
+def plot_bulk_qc_summary(
+    qc_table: pd.DataFrame,
+    output_dir,
+    *,
+    name: str = "bulk_qc_summary",
+    r2_warn: Optional[float] = None,
+) -> FigureResult:
+    """Grouped bar of per-sample QC metrics (R², profile correlation, …)."""
+    go = require_plotly()
+    table = qc_table.select_dtypes("number")
+    fig = go.Figure()
+    colours = color_sequence(table.shape[1])
+    for j, col in enumerate(table.columns):
+        fig.add_bar(x=[str(s) for s in table.index], y=table[col].to_numpy(),
+                    name=str(col), marker_color=colours[j])
+    if r2_warn is not None:
+        fig.add_hline(y=r2_warn, line_dash="dash", line_color="firebrick",
+                      annotation_text=f"R² warn = {r2_warn}")
+    fig.update_layout(barmode="group",
+                      **plotly_layout("Bulk per-sample QC (heuristic thresholds)",
+                                      subtitle=_BULK_SUB, height=460))
+    fig.update_xaxes(title_text="sample", tickangle=90)
+    fig.update_yaxes(title_text="metric value")
+    return export_figure(fig, output_dir, name, data={"data": table},
+                         caption=_captions.bulk_qc_caption(r2_warn=r2_warn),
+                         data_comment=["Per-sample bulk QC; thresholds heuristic."])
+
+
+def plot_bulk_uncertainty(
+    proportions: pd.DataFrame,
+    lower_ci: Optional[pd.DataFrame],
+    upper_ci: Optional[pd.DataFrame],
+    output_dir,
+    *,
+    name: str = "bulk_uncertainty_plot",
+) -> FigureResult:
+    """Mean estimate and bootstrap CI width per cell type (uncertainty surfaced)."""
+    go = require_plotly()
+    mean_est = proportions.mean(axis=0)
+    fig = go.Figure()
+    warnings: list[str] = []
+    if lower_ci is not None and upper_ci is not None:
+        width = (upper_ci - lower_ci).mean(axis=0).reindex(mean_est.index)
+        table = pd.DataFrame({"mean_estimate": mean_est, "mean_ci_width": width})
+        fig.add_bar(x=table.index.astype(str), y=table["mean_estimate"].to_numpy(),
+                    name="mean estimate",
+                    error_y={"type": "data", "array": (width / 2).to_numpy(),
+                             "visible": True},
+                    marker_color="#4C72B0")
+        sub = "mean mRNA-derived proportion ± half mean bootstrap CI width"
+    else:
+        table = pd.DataFrame({"mean_estimate": mean_est})
+        fig.add_bar(x=table.index.astype(str), y=table["mean_estimate"].to_numpy(),
+                    marker_color="#8C8C8C")
+        sub = "no bootstrap CIs available — uncertainty not quantified"
+        warnings.append("No bootstrap CIs available; uncertainty not shown.")
+    fig.update_layout(**plotly_layout("Bulk uncertainty", subtitle=sub, height=460))
+    fig.update_xaxes(title_text="cell type", tickangle=90)
+    fig.update_yaxes(title_text="mRNA-derived proportion", range=[0, 1])
+    res = export_figure(fig, output_dir, name, data={"data": table},
+                        caption="Bulk estimate uncertainty. " + _BULK_SUB,
+                        data_comment=["estimate_type: mRNA_proportion"])
+    res.warnings.extend(warnings)
+    return res

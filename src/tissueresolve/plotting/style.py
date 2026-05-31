@@ -41,7 +41,61 @@ __all__ = [
     "get_palette",
     "new_figure",
     "save_outputs",
+    # Plotly publication layer (matplotlib-free)
+    "PALETTE",
+    "ESTIMATE_SUBTITLE",
+    "color_sequence",
+    "plotly_layout",
 ]
+
+# ---------------------------------------------------------------------------
+# Plotly publication theme (no matplotlib / seaborn dependency)
+# ---------------------------------------------------------------------------
+
+#: Colour-blind-friendly qualitative palette (extends the base one to 24).
+PALETTE: tuple[str, ...] = (
+    "#4C72B0", "#DD8452", "#55A868", "#C44E52", "#8172B3", "#937860",
+    "#DA8BC3", "#8C8C8C", "#CCB974", "#64B5CD", "#1F77B4", "#FF7F0E",
+    "#2CA02C", "#D62728", "#9467BD", "#8C564B", "#E377C2", "#7F7F7F",
+    "#BCBD22", "#17BECF", "#AEC7E8", "#FFBB78", "#98DF8A", "#FF9896",
+)
+
+#: Mandatory estimate-type subtitles (never report bulk as cell fractions, or
+#: spatial as cell counts).
+ESTIMATE_SUBTITLE: dict[str, str] = {
+    "bulk": "mRNA-derived proportion, not absolute cell fraction",
+    "spatial": "spot-level RNA-derived composition, not cell counts",
+}
+
+
+def color_sequence(n: int) -> list[str]:
+    """Return *n* distinct hex colours by cycling :data:`PALETTE`."""
+    return [PALETTE[i % len(PALETTE)] for i in range(max(0, n))]
+
+
+def plotly_layout(title: str, *, subtitle: str | None = None,
+                  height: int | None = None, width: int | None = None) -> dict:
+    """A consistent, clean Plotly layout dict (white background, readable fonts).
+
+    When *subtitle* is given (e.g. the estimate-type disclaimer) it is appended
+    under the title in a smaller grey font.
+    """
+    full_title = title
+    if subtitle:
+        full_title = f"{title}<br><sup>{subtitle}</sup>"
+    layout = {
+        "title": {"text": full_title, "x": 0.5, "xanchor": "center",
+                  "font": {"size": 16}},
+        "template": "plotly_white",
+        "font": {"size": 12, "family": "Helvetica, Arial, sans-serif"},
+        "margin": {"l": 70, "r": 40, "t": 90, "b": 80},
+        "legend": {"title": {"text": "Cell type"}, "font": {"size": 10}},
+    }
+    if height:
+        layout["height"] = height
+    if width:
+        layout["width"] = width
+    return layout
 
 #: Figure formats saved by default.  All three are publication-usable.
 DEFAULT_FORMATS: tuple[str, ...] = ("png", "pdf", "svg")

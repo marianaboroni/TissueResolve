@@ -120,6 +120,29 @@ tr.generate_report(result, "out/report.html", figures=figs)
 
 Or via the CLI: `tissueresolve spatial run --visium ... --reference ... --output ...`
 
+## Reports & figures (publication layer)
+
+TissueResolve produces an interactive HTML report plus publication figures for
+both modalities. Figures are **Plotly** (interactive HTML); static PDF/SVG/PNG
+are written when `kaleido` is installed, otherwise HTML + source data are still
+saved and a warning is recorded. **Every figure writes its source data as a
+`.data.tsv`** next to it.
+
+```bash
+pip install "tissueresolve[report]"          # plotly + kaleido + jinja2
+
+# Generate a report from a results directory (tables/ + figures/):
+tissueresolve bulk report --results-dir results/bulk --out results/bulk/report.html
+tissueresolve spatial report --results-dir results/spatial
+tissueresolve report --modality bulk --results-dir results/bulk
+```
+
+In Python: `from tissueresolve.report import generate_report` and
+`tissueresolve.plotting.{bulk_plots,spatial_plots,separability_plots,spillover_plots}`.
+Reports surface all warnings (estimate type, low confidence, non-separability,
+spillover, non-convergence) and never hide failed checks. **Static export
+requires kaleido**; without it you still get interactive HTML and source data.
+
 ## Architecture
 
 See `DESIGN_SPEC.md` for the full architecture specification and

@@ -41,6 +41,37 @@ so it is **not** flagged unless the user opts in.
 Pairs above the HIGH threshold are surfaced as warnings; estimates for those
 cell types are reported as unreliable rather than confident.
 
+## Resolvability (Stage 6)
+
+`reference.resolution` classifies each cell-type pair by its separability score
+`s = 1 − Bhattacharyya` (`ResolutionConfig`):
+
+| Class | Separability score `s` | Bhattacharyya | Meaning |
+|---|---|---|---|
+| `resolved` | `s ≥ 0.20` | BC ≤ 0.80 | reliably distinguishable |
+| `partially_resolved` | `0.10 ≤ s < 0.20` | 0.80 < BC ≤ 0.90 | usable with caution |
+| `poorly_resolved` | `0.03 ≤ s < 0.10` | 0.90 < BC ≤ 0.97 | unreliable apart |
+| `unresolved` | `s < 0.03` | BC > 0.97 | effectively indistinguishable |
+
+Pairs with `BC ≥ family_bc_threshold` (default 0.90) are grouped into a
+**family**. These thresholds align with the existing `PairSeparability` risk
+levels and are tunable via `ResolutionConfig`.
+
+## Spillover and the abstain (unresolved) mode
+
+`benchmark.spillover` deconvolves pure single-type pseudobulks to build a
+**spillover matrix** (row = true type, column = predicted type, rows sum to 1).
+`spillover_risk = 1 − self_retention` (off-diagonal mass). Defaults
+(`ResolutionConfig`): `spillover_threshold = 0.30`, `unresolved_threshold = 0.10`
+(family mean separability), `uncertainty_threshold = 0.10` (bootstrap CI width).
+
+`apply_unresolved_mode` collapses a multi-member family into a single
+`unresolved_<family>` column **only when several signals agree** (low
+separability, plus — when provided — high spillover risk and/or high bootstrap
+uncertainty). It is configurable (`allow_unresolved`, default `True`) and
+**preserves total mass**. These are conservative defaults, not validated
+universal cut-offs.
+
 ## Using your own thresholds
 
 All thresholds live in `TissueResolveConfig` (`bulk_qc`, `spatial_qc`) and are

@@ -11,6 +11,18 @@ Submodules (implemented in Stage 5):
     Auto-generated methods section text suitable for publication.
     Includes algorithm description, parameter values, and software versions.
 
-``templates``
-    Jinja2 or f-string HTML templates.
+``templates``, ``sections``, ``assets``
+    HTML skeleton, section builders, and results-directory loaders for the
+    publication-layer reports.
 """
+from tissueresolve.report.html import (
+    generate_bulk_report,
+    generate_report,
+    generate_spatial_report,
+)
+
+__all__ = [
+    "generate_bulk_report",
+    "generate_spatial_report",
+    "generate_report",
+]

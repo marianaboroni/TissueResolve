@@ -79,7 +79,60 @@ python scripts/04_run_spatial_validation.py
 
 # 5) Summary report (works after a partial run):
 python scripts/05_summarize_results.py
+
+# 6) (optional) Resolution & spillover analysis:
+python scripts/06_resolution_spillover_analysis.py
+#   faster expression-only spillover proxy:
+python scripts/06_resolution_spillover_analysis.py --spillover-method expression
+
+# 7) (optional) Generate publication HTML reports + figures from existing outputs:
+python scripts/07_generate_reports.py
 ```
+
+## Reports & figures (Stage 7)
+
+`scripts/07_generate_reports.py` reads the existing outputs (no re-download,
+no re-fit) and writes:
+
+- `outputs/bulk/report.html`, `outputs/bulk/figures/*` (clustered composition
+  barplot, heatmap, QC summary, uncertainty, separability + spillover heatmaps,
+  spillover network);
+- `outputs/spatial/report.html`, `outputs/spatial/figures/*` (mean composition
+  barplot, Moran's I barplot, and — when array coordinates are available in the
+  local Visium `.h5ad` — abundance maps, dominant-type map, per-spot pie charts;
+  plus separability/spillover heatmaps);
+- `outputs/validation_summary/report.html` (combined).
+
+Figures are interactive Plotly HTML and each writes its `.data.tsv`. Install
+`pip install "tissueresolve[report]"` first; **static PDF/SVG/PNG require
+`kaleido`** — without it the HTML and source data are still written and a
+warning is recorded. Bulk values are mRNA-derived proportions (not cell
+fractions) and spatial values are spot-level RNA-derived composition (not cell
+counts); reports surface all separability/spillover/uncertainty warnings.
+
+## Resolution & spillover (Stage 6)
+
+The breast-cancer reference has 32 fine cell types with many poorly separable
+pairs. Script 06 makes this actionable. It loads the saved reference (and the
+bulk/spatial estimates if present) and writes to `outputs/resolution/`:
+
+- `cell_type_families.tsv` — confusable types grouped into families;
+- `pairwise_resolvability.tsv` — every pair classified `resolved` →
+  `unresolved`;
+- `spillover_matrix.tsv` — true→predicted leakage (rows sum to 1);
+- `spillover_risk_by_celltype.tsv` — per-type spillover risk + main partner;
+- `pairwise_spillover_report.tsv`, `recommended_merges.tsv`,
+  `unresolved_families.tsv`;
+- `bulk_resolution_annotation.tsv` / `spatial_resolution_annotation.tsv` —
+  each estimate tagged with its family, resolvability, spillover risk, and a
+  recommended interpretation level (`subtype` vs `family/broad`);
+- `resolution_summary.md`.
+
+Interpretation: see `../../docs/output_interpretation.md`. In short — bulk
+values are **mRNA proportions** (not cell fractions); spatial values are
+**spot-level composition** (not cell counts); and when subtypes are not
+separable, TissueResolve reports the **family** (or `unresolved_<family>`)
+rather than overclaiming a confident split.
 
 ## Progress reporting
 

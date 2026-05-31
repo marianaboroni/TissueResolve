@@ -11,8 +11,11 @@ python -m pip install -e ".[all]"   # spatial + report + plots + dev
 ```
 
 `scikit-learn` and `scanpy` come with the `[spatial]` extra; `matplotlib` with
-`[plots]`; `jinja2` is optional (`[report]`) — the HTML reporter uses f-strings
-and does not require it.
+`[plots]`. The `[report]` extra provides `plotly` (interactive figures),
+`kaleido` (static PDF/SVG/PNG export from Plotly), and `jinja2`. The HTML
+reporter works without `jinja2` (it uses f-strings); without `kaleido` it still
+writes interactive HTML + source data and records a warning. Install the full
+publication layer with `pip install -e ".[report]"` (or `.[all]`).
 
 ## Running tests
 

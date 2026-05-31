@@ -23,7 +23,7 @@ import pandas as pd
 
 from tissueresolve.report import methods_text as _mt
 
-__all__ = ["generate_bulk_report", "generate_spatial_report"]
+__all__ = ["generate_bulk_report", "generate_spatial_report", "generate_report"]
 
 _CSS = """
 body { font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
@@ -55,7 +55,36 @@ ul { font-size: 13px; }
 
 
 def generate_bulk_report(
-    result: Any,  # BulkPipelineResult
+    source: Any,  # BulkPipelineResult OR results-directory path
+    output_path: Union[str, Path, None] = None,
+    *,
+    out: Union[str, Path, None] = None,
+    run_metadata: Optional[dict] = None,
+    warnings: Optional[list] = None,
+    separability: Any = None,
+    figures: Optional[Sequence[Any]] = None,
+    output_files: Optional[Iterable[Union[str, Path]]] = None,
+    methods: Optional[str] = None,
+    title: str = "TissueResolve — Bulk deconvolution report",
+) -> Path:
+    """Write a bulk HTML report.
+
+    Dispatches on *source*: a path/str is treated as a **results directory**
+    (reads ``tables/`` + ``figures/`` and embeds them); a pipeline-result
+    object uses the in-memory renderer.
+    """
+    out_path = output_path or out
+    if isinstance(source, (str, Path)):
+        return _generate_report_from_dir(
+            source, out_path, modality="bulk", title=title,
+            run_metadata=run_metadata, warnings=warnings)
+    return _generate_bulk_report_from_result(
+        source, out_path, separability=separability, figures=figures,
+        output_files=output_files, methods=methods, title=title)
+
+
+def _generate_bulk_report_from_result(
+    result: Any,
     output_path: Union[str, Path],
     *,
     separability: Any = None,
@@ -113,7 +142,7 @@ def generate_bulk_report(
     if separability is not None:
         parts.append(_section("Separability", _separability_html(separability)))
     if figures:
-        parts.append(_section("Figures", _figures_html(figures)))
+        parts.append(_section("Figures", _figures_html(figures, Path(output_path).parent)))
     if output_files:
         parts.append(_section("Output files", _file_list_html(output_files)))
     parts.append(_section("Run metadata", _meta_html(meta)))
@@ -125,7 +154,31 @@ def generate_bulk_report(
 
 
 def generate_spatial_report(
-    result: Any,  # SpatialPipelineResult
+    source: Any,  # SpatialPipelineResult OR results-directory path
+    output_path: Union[str, Path, None] = None,
+    *,
+    out: Union[str, Path, None] = None,
+    run_metadata: Optional[dict] = None,
+    warnings: Optional[list] = None,
+    separability: Any = None,
+    figures: Optional[Sequence[Any]] = None,
+    output_files: Optional[Iterable[Union[str, Path]]] = None,
+    methods: Optional[str] = None,
+    title: str = "TissueResolve — Spatial deconvolution report",
+) -> Path:
+    """Write a spatial HTML report (results-dir path or in-memory result)."""
+    out_path = output_path or out
+    if isinstance(source, (str, Path)):
+        return _generate_report_from_dir(
+            source, out_path, modality="spatial", title=title,
+            run_metadata=run_metadata, warnings=warnings)
+    return _generate_spatial_report_from_result(
+        source, out_path, separability=separability, figures=figures,
+        output_files=output_files, methods=methods, title=title)
+
+
+def _generate_spatial_report_from_result(
+    result: Any,
     output_path: Union[str, Path],
     *,
     separability: Any = None,
@@ -193,7 +246,7 @@ def generate_spatial_report(
     if separability is not None:
         parts.append(_section("Separability", _separability_html(separability)))
     if figures:
-        parts.append(_section("Figures", _figures_html(figures)))
+        parts.append(_section("Figures", _figures_html(figures, Path(output_path).parent)))
     if output_files:
         parts.append(_section("Output files", _file_list_html(output_files)))
     parts.append(_section("Run metadata", _meta_html(meta)))
@@ -341,22 +394,38 @@ def _separability_html(report) -> str:
                    f"{rows}</table>")
 
 
-def _figures_html(figures: Sequence[Any]) -> str:
+def _figures_html(figures: Sequence[Any], base_dir: Path | None = None) -> str:
     blocks = []
     for i, fig in enumerate(figures):
         png = None
+        html_link = None
         caption = None
-        # Accept PlotResult, a path, or a (path, caption) pair.
+        # Accept PlotResult / FigureResult, a path, or a (path, caption) pair.
         if hasattr(fig, "figure_paths"):
             png = fig.figure_paths.get("png")
             caption = getattr(fig, "caption", None)
+            html_link = getattr(fig, "html_path", None)
         elif isinstance(fig, (str, Path)):
             png = Path(fig)
+        elif isinstance(fig, tuple) and len(fig) == 2:
+            png, caption = fig
         if png is not None and Path(png).exists():
             b64 = base64.b64encode(Path(png).read_bytes()).decode("ascii")
             blocks.append(f"<img src='data:image/png;base64,{b64}' alt='figure {i}'>")
+        elif html_link is not None:
+            path = Path(html_link)
+            if base_dir is not None:
+                try:
+                    rel = path.relative_to(base_dir)
+                except ValueError:
+                    rel = path
+            else:
+                rel = path
+            blocks.append(
+                f"<p><a href='{_html.escape(str(rel))}'>Open interactive figure {i}</a></p>"
+            )
         if caption:
-            blocks.append(f"<p class='caption'>{_html.escape(caption)}</p>")
+            blocks.append(f"<p class='caption'>{_html.escape(str(caption))}</p>")
     return "".join(blocks) or "<p>No figures.</p>"
 
 
@@ -373,3 +442,67 @@ def _meta_html(meta: dict) -> str:
         for k, v in meta.items()
     )
     return f"<table>{rows}</table>"
+
+
+# ---------------------------------------------------------------------------
+# Results-directory-driven report (publication layer)
+# ---------------------------------------------------------------------------
+
+
+def _generate_report_from_dir(
+    results_dir: Union[str, Path],
+    output_path: Union[str, Path, None],
+    *,
+    modality: str,
+    title: str,
+    run_metadata: Optional[dict] = None,
+    warnings: Optional[list] = None,
+) -> Path:
+    """Build a report by reading a results directory's tables/ and figures/."""
+    from tissueresolve.report import sections, templates
+
+    results_dir = Path(results_dir)
+    if run_metadata is None:
+        run_metadata = assets_read_metadata(results_dir)
+    if modality == "bulk":
+        secs = sections.bulk_sections(results_dir, run_metadata=run_metadata,
+                                      warnings=warnings)
+    else:
+        secs = sections.spatial_sections(results_dir, run_metadata=run_metadata,
+                                         warnings=warnings)
+    body, toc = sections.build_sections_html(secs)
+    doc = templates.page(title, body, toc=toc)
+    out = Path(output_path) if output_path else (results_dir / "report.html")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(doc, encoding="utf-8")
+    return out
+
+
+def assets_read_metadata(results_dir: Path) -> dict:
+    from tissueresolve.report import assets
+
+    for base in (results_dir, results_dir / "tables"):
+        m = assets.read_json(base / "run_metadata.json")
+        if isinstance(m, dict):
+            return m
+    return {}
+
+
+def generate_report(
+    modality: str,
+    source: Any,
+    output_path: Union[str, Path, None] = None,
+    *,
+    out: Union[str, Path, None] = None,
+    **kwargs: Any,
+) -> Path:
+    """Dispatch to the bulk or spatial report generator.
+
+    *modality* is ``"bulk"`` or ``"spatial"``; *source* is a results-directory
+    path or an in-memory pipeline result.
+    """
+    if modality == "bulk":
+        return generate_bulk_report(source, output_path, out=out, **kwargs)
+    if modality == "spatial":
+        return generate_spatial_report(source, output_path, out=out, **kwargs)
+    raise ValueError(f"modality must be 'bulk' or 'spatial', got {modality!r}.")

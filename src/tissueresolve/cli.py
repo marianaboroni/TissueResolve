@@ -56,6 +56,19 @@ def bulk_benchmark() -> None:
     sys.exit(2)
 
 
+@bulk.command(name="report")
+@click.option("--results-dir", required=True, type=click.Path(exists=True),
+              help="Directory with tables/ and figures/ from a bulk run.")
+@click.option("--out", "out_path", default=None, type=click.Path(),
+              help="Output HTML path (default: <results-dir>/report.html).")
+def bulk_report(results_dir: str, out_path: str | None) -> None:
+    """Generate a bulk HTML report from a results directory."""
+    from tissueresolve.report import generate_report
+
+    out = generate_report("bulk", results_dir, out_path)
+    click.echo(f"Wrote bulk report -> {out}")
+
+
 # ---------------------------------------------------------------------------
 # spatial sub-group (Stage 4)
 # ---------------------------------------------------------------------------
@@ -212,14 +225,16 @@ def spatial_run(
 
 
 @spatial.command(name="report")
-def spatial_report() -> None:
-    """Generate HTML report.  (Not yet implemented — Stage 5.)"""
-    click.echo(
-        "tissueresolve spatial report — not yet implemented (report module "
-        "arrives in Stage 5).",
-        err=True,
-    )
-    sys.exit(2)
+@click.option("--results-dir", required=True, type=click.Path(exists=True),
+              help="Directory with tables/ and figures/ from a spatial run.")
+@click.option("--out", "out_path", default=None, type=click.Path(),
+              help="Output HTML path (default: <results-dir>/report.html).")
+def spatial_report(results_dir: str, out_path: str | None) -> None:
+    """Generate a spatial HTML report from a results directory."""
+    from tissueresolve.report import generate_report
+
+    out = generate_report("spatial", results_dir, out_path)
+    click.echo(f"Wrote spatial report -> {out}")
 
 
 @spatial.command(name="benchmark")
@@ -321,6 +336,25 @@ def _load_or_build_reference(reference_path: str, cfg, cell_type_col: str):
         f"Cannot interpret reference {reference_path!r}: expected a saved "
         "ReferenceSignature directory or an .h5ad file."
     )
+
+
+# ---------------------------------------------------------------------------
+# top-level report
+# ---------------------------------------------------------------------------
+
+@cli.command(name="report")
+@click.option("--modality", type=click.Choice(["bulk", "spatial"]), required=True,
+              help="Which report to generate.")
+@click.option("--results-dir", required=True, type=click.Path(exists=True),
+              help="Directory with tables/ and figures/.")
+@click.option("--out", "out_path", default=None, type=click.Path(),
+              help="Output HTML path (default: <results-dir>/report.html).")
+def report(modality: str, results_dir: str, out_path: str | None) -> None:
+    """Generate a bulk or spatial HTML report from a results directory."""
+    from tissueresolve.report import generate_report
+
+    out = generate_report(modality, results_dir, out_path)
+    click.echo(f"Wrote {modality} report -> {out}")
 
 
 # ---------------------------------------------------------------------------
