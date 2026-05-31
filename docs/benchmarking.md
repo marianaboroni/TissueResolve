@@ -80,3 +80,38 @@ git-ignored and never committed.
 - TissueResolve is not claimed to be universally more accurate; the goal is to
   make uncertainty, spillover, protocol/normalization/library/batch effects, and
   resolution limits explicit.
+
+## Real external-tool benchmark
+
+The internal benchmark compares TissueResolve against internal baselines. To
+compare against **published external tools** (bulk: MuSiC, BayesPrism, BisqueRNA;
+spatial: cell2location, CARD, SPOTlight), use the real external benchmark.
+
+External tools live in **separate environments** (see
+`benchmarks/envs/benchmark_installation.md`) so they cannot break the main
+`.venv`. They are included **only when installed or when their results are
+imported** — tools that are merely *exported* or *skipped* are never counted as
+benchmarked or scored.
+
+```bash
+python benchmarks/run_real_external_benchmark.py --dry-run            # plan + availability
+python benchmarks/run_real_external_benchmark.py --prepare-inputs --use-existing-real-data
+python benchmarks/run_real_external_benchmark.py --install-tools      # attempt installs (slow; logs)
+python benchmarks/run_real_external_benchmark.py --run-all --use-existing-real-data --fast
+```
+
+Import results produced elsewhere (counted as *executed (imported)*):
+
+```bash
+python benchmarks/import_external_results.py --method cell2location --modality spatial \
+    --predictions preds.tsv --spot-id-col spot
+```
+
+Outputs: `tool_installation_status.tsv`, `composite_scores.tsv`,
+`real_external_method_status.tsv`, and `real_external_benchmark_report.html`
+(executive summary, method status, composite score, best-tool-by-scenario,
+metric explanations, limitations). The **composite score** weights accuracy,
+robustness, usability, interpretability, resolution-awareness, and
+runtime/resource (config: `benchmarks/configs/composite_score_weights.yaml`);
+only executed/imported tools are scored, and real-Visium runs exclude accuracy
+(no ground truth).

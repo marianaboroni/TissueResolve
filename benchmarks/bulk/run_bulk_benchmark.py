@@ -106,7 +106,11 @@ def main(argv=None) -> int:
 
     methods = bulk_methods(include_external=not args.no_external)
     if args.include_imported:
-        from benchmarks.shared.imported import discover_imported
+        from benchmarks.shared.imported import (
+            discover_imported, discover_executed_external)
+        # locally-executed external tools (e.g. BisqueRNA via run_bisque.R) +
+        # results imported from elsewhere
+        methods += discover_executed_external("bulk")
         methods += discover_imported("bulk")
 
     if args.dry_run:

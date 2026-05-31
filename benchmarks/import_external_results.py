@@ -52,15 +52,20 @@ def main(argv=None) -> int:
     ap.add_argument("--modality", required=True, choices=("bulk", "spatial"))
     ap.add_argument("--predictions", required=True, type=Path,
                     help="TSV of obs × cell_type predictions from the external tool")
+    ap.add_argument("--spot-id-col", default=None,
+                    help="Column holding spot/sample IDs (default: first/index column).")
     ap.add_argument("--out", type=Path, default=None,
-                    help="Destination (default: benchmarks/outputs/<modality>/external/<method>.tsv)")
+                    help="Destination (default: benchmarks/outputs/<modality>/imported/<method>.tsv)")
     args = ap.parse_args(argv)
 
     if not args.predictions.exists():
         print(f"ERROR: predictions file not found: {args.predictions}", file=sys.stderr)
         return 1
     sep = "\t" if args.predictions.suffix.lower() in (".tsv", ".txt") else ","
-    df = pd.read_csv(args.predictions, sep=sep, index_col=0, comment="#")
+    if args.spot_id_col:
+        df = pd.read_csv(args.predictions, sep=sep, comment="#").set_index(args.spot_id_col)
+    else:
+        df = pd.read_csv(args.predictions, sep=sep, index_col=0, comment="#")
     if df.empty or df.shape[1] < 2:
         print("ERROR: predictions must be obs × cell_type with ≥2 cell-type columns.",
               file=sys.stderr)
@@ -68,7 +73,7 @@ def main(argv=None) -> int:
     if args.method not in KNOWN_EXTERNAL.get(args.modality, []):
         print(f"NOTE: {args.method!r} is not in the recognised {args.modality} list "
               f"({', '.join(KNOWN_EXTERNAL[args.modality])}); importing anyway.")
-    out = args.out or (OUTPUTS_DIR / args.modality / "external" / f"{args.method}.tsv")
+    out = args.out or (OUTPUTS_DIR / args.modality / "imported" / f"{args.method}.tsv")
     write_tsv(df, out, comment=[
         f"imported external predictions: {args.method} ({args.modality})",
         "executed_or_exported: executed_imported",

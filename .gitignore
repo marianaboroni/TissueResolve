@@ -32,6 +32,9 @@ examples/real_breast_cancer/outputs/
 
 # Benchmark outputs (never commit generated benchmark results/exports)
 benchmarks/outputs/
+# External-tool R libraries and run/install logs (never commit)
+benchmarks/envs/Rlib/
+benchmarks/logs/
 *.h5ad
 *.h5
 *.loom

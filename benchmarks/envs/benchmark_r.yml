@@ -1,0 +1,19 @@
+# Conda environment for R-based external bulk/spatial deconvolution tools.
+# Create with:  conda env create -f benchmarks/envs/benchmark_r.yml
+# (kept separate from the main TissueResolve .venv to avoid breaking it)
+name: tissueresolve-bench-r
+channels: [conda-forge, bioconda, defaults]
+dependencies:
+  - r-base>=4.2
+  - r-devtools
+  - r-biocmanager
+  - r-matrix
+  - r-mass
+  # installed from R (see install_external_tools.sh) because they are on
+  # Bioconductor/GitHub, not conda:
+  #   MuSiC      (BiocManager::install('MuSiC') or github xuranw/MuSiC)
+  #   BayesPrism (github Danko-Lab/BayesPrism)
+  #   BisqueRNA  (install.packages('BisqueRNA'))
+  #   CARD       (github YingMa0107/CARD)
+  #   SPOTlight  (BiocManager::install('SPOTlight'))
+  #   spacexr/RCTD (github dmcable/spacexr)  [optional]
