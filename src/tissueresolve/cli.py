@@ -37,7 +37,13 @@ def cli() -> None:
 @click.option("--query", required=True, help="Bulk counts table or Visium .h5ad or folder")
 @click.option("--out", required=True, help="Output directory for analysis bundle")
 @click.option("--mode", type=click.Choice(["auto", "bulk", "spatial"]), default="auto")
-@click.option("--resolution-mode", type=click.Choice(["none", "suggest", "auto", "hierarchical"]), default="suggest")
+@click.option("--resolution-mode",
+              type=click.Choice(["auto", "hierarchical", "flat", "none", "suggest"]),
+              default="auto", show_default=True,
+              help="auto = use hierarchical broad→fine when broad/fine labels or a "
+                   "mapping are available, else flat (recommended default). "
+                   "hierarchical = force broad→fine (requires labels/mapping). "
+                   "flat/none = fine-only. suggest = flat + family recommendations.")
 @click.option("--broad-cell-type-col", default="auto", show_default=True,
               help="obs column with broad/compartment labels (hierarchical mode). "
                    "'auto' detects a known candidate column.")
@@ -111,11 +117,25 @@ def _run_top_level(
                 "Could not auto-detect query mode; use --mode to specify 'bulk' or 'spatial'."
             )
 
+    # Resolve the requested resolution mode to a concrete one (auto → hierarchical
+    # when broad/fine labels/mapping are available; else flat-with-caution).
+    requested_resolution_mode = resolution_mode
+    resolution_mode, resolution_reason = _select_resolution_mode(
+        requested_resolution_mode, reference=reference,
+        broad_col=broad_cell_type_col,
+        fine_col=fine_cell_type_col,
+        hierarchy_path=hierarchy_path, preset=preset)
+    print(f"Resolution mode: requested={requested_resolution_mode!r} → "
+          f"using {resolution_mode!r}.")
+    print(f"  reason: {resolution_reason}")
+
     plan = {
         "detected_reference": detected_ref,
         "detected_query": detected_query,
         "mode": resolved_mode,
+        "requested_resolution_mode": requested_resolution_mode,
         "resolution_mode": resolution_mode,
+        "resolution_mode_reason": resolution_reason,
         "preset": preset,
         "preset_params": preset_params,
         "protocol": proto,
@@ -133,6 +153,8 @@ def _run_top_level(
         _print_summary_table(
             [
                 ("mode", resolved_mode),
+                ("resolution_mode", resolution_mode),
+                ("resolution_reason", resolution_reason),
                 ("preset", preset),
                 ("reference type", detected_ref),
                 ("query type", detected_query),
@@ -158,9 +180,18 @@ def _run_top_level(
 
     run_metadata = {
         "tissueresolve_version": __version__,
+        "requested_resolution_mode": requested_resolution_mode,
+        "resolution_mode": resolution_mode,
+        "resolution_mode_reason": resolution_reason,
         "analysis_plan": plan,
         "pipeline_run": result.run_metadata,
     }
+    # surface the selected mode + reason on the result so the report can state it
+    try:
+        result.run_metadata.setdefault("resolution_mode", resolution_mode)
+        result.run_metadata["resolution_mode_reason"] = resolution_reason
+    except Exception:
+        pass
     (outp / "run_metadata.json").write_text(json.dumps(run_metadata, indent=2, default=str))
 
     _print_summary_table(
@@ -191,6 +222,83 @@ def _configure_from_preset(preset_params: dict[str, Any]):
         if hasattr(cfg.hierarchical, k):
             setattr(cfg.hierarchical, k, v)
     return cfg
+
+
+def _detect_hierarchy_availability(reference: str, broad_col: str,
+                                   fine_col: str, hierarchy_path):
+    """Cheaply check whether hierarchical annotations are available.
+
+    Returns ``(available: bool, source: str | None)`` without building the full
+    mapping.  A ``--cell-type-hierarchy`` file always counts; otherwise the
+    reference ``.h5ad`` ``obs`` is inspected (backed) for broad + fine columns.
+    Saved ReferenceSignature directories carry no per-cell annotations, so only
+    the mapping-file route applies to them.
+    """
+    if hierarchy_path:
+        return True, f"mapping file: {hierarchy_path}"
+    path = Path(reference)
+    if path.suffix in {".h5ad", ".h5"}:
+        try:
+            import anndata as ad
+            from tissueresolve.io import validation as v
+
+            obs = ad.read_h5ad(reference, backed="r").obs
+            b = (v.detect_broad_cell_type_col(obs)
+                 if broad_col in (None, "auto") else
+                 (broad_col if broad_col in obs.columns else None))
+            f = (v.detect_fine_cell_type_col(obs, exclude=b)
+                 if fine_col in (None, "auto") else
+                 (fine_col if fine_col in obs.columns else None))
+            if b and f and b != f:
+                return True, f"obs columns broad={b!r}, fine={f!r}"
+        except Exception:
+            return False, None
+    return False, None
+
+
+def _select_resolution_mode(requested: str, *, reference: str, broad_col: str,
+                            fine_col: str, hierarchy_path, preset: str):
+    """Resolve a user-requested resolution mode to a concrete one + a reason.
+
+    ``auto`` (the default) selects **hierarchical** broad→fine when broad/fine
+    annotations or a mapping are available, because that reduces spillover and
+    yields more reliable interpretation.  When they are not available, ``auto``
+    falls back to flat (fine-only) with a caution — or, for the
+    ``publication``/``diagnostic`` presets, stops and asks for broad/fine
+    labels (those presets imply a publication-grade claim).
+
+    Returns ``(resolved_mode, reason)`` where *resolved_mode* is one of
+    ``"hierarchical" | "none" | "suggest"`` (``"flat"`` maps to ``"none"``).
+    """
+    if requested == "flat":
+        return "none", "user explicitly requested flat (fine-only) deconvolution"
+    if requested == "none":
+        return "none", "user requested none (flat, fine-only)"
+    if requested == "suggest":
+        return "suggest", "user requested suggest (flat + family recommendations)"
+    if requested == "hierarchical":
+        return "hierarchical", "user requested hierarchical broad→fine deconvolution"
+
+    # requested == "auto"
+    available, source = _detect_hierarchy_availability(
+        reference, broad_col, fine_col, hierarchy_path)
+    if available:
+        return "hierarchical", (
+            f"auto: hierarchical broad→fine selected because hierarchical "
+            f"annotations are available ({source})")
+    if preset in ("publication", "diagnostic"):
+        raise click.ClickException(
+            "auto resolution-mode with the "
+            f"'{preset}' preset requires broad/fine cell-type annotations for "
+            "publication-grade hierarchical deconvolution, but none were found. "
+            "Add broad/fine columns to the reference (and set "
+            "--broad-cell-type-col / --fine-cell-type-col), provide "
+            "--cell-type-hierarchy mapping.tsv, or pass --resolution-mode flat "
+            "to run fine-only deconvolution explicitly.")
+    return "none", (
+        "auto: no broad/fine annotations or mapping found; falling back to flat "
+        "(fine-only).  Provide broad/fine labels or --cell-type-hierarchy to "
+        "enable the recommended hierarchical broad→fine workflow.")
 
 
 def _resolve_hierarchy_mapping(reference_path: str, ref, cfg, hierarchy_path):
@@ -380,7 +488,9 @@ def run(argv: list | None = None) -> int:
     parser.add_argument("--query", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--mode", choices=("auto", "bulk", "spatial"), default="auto")
-    parser.add_argument("--resolution-mode", choices=("none", "suggest", "auto", "hierarchical"), default="suggest")
+    parser.add_argument("--resolution-mode",
+                        choices=("auto", "hierarchical", "flat", "none", "suggest"),
+                        default="auto")
     parser.add_argument("--broad-cell-type-col", default="auto")
     parser.add_argument("--fine-cell-type-col", default="auto")
     parser.add_argument("--cell-type-hierarchy", dest="hierarchy_path", default=None)

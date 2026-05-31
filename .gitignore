@@ -29,6 +29,9 @@ spatcar/
 # Real-data validation files
 examples/real_breast_cancer/data/
 examples/real_breast_cancer/outputs/
+
+# Benchmark outputs (never commit generated benchmark results/exports)
+benchmarks/outputs/
 *.h5ad
 *.h5
 *.loom

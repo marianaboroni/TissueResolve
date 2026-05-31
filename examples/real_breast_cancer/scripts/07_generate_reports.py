@@ -476,6 +476,111 @@ def generate_combined_report() -> Path:
     return out
 
 
+def _read_text(path) -> str:
+    from pathlib import Path as _P
+    p = _P(path)
+    return p.read_text(encoding="utf-8") if p.exists() else ""
+
+
+def generate_unified_report() -> Path:
+    """One report.html with nav linking every section (the main entry point)."""
+    from tissueresolve.report import templates as T
+    from tissueresolve.report.unified import Section, build_unified_report
+
+    out_dir = H.OUTPUTS_DIR
+    rel = lambda p: __import__("os").path.relpath(p, out_dir)  # noqa: E731
+
+    sections = []
+
+    md = H.OUT_SUMMARY_DIR / "validation_summary.md"
+    sections.append(Section("summary", "1. Executive summary",
+                            "<pre>" + T.escape(_read_text(md)) + "</pre>"
+                            if md.exists() else ""))
+
+    ref_sum = H.OUT_REFERENCE_DIR / "reference_summary.tsv"
+    refq = ""
+    if ref_sum.exists():
+        try:
+            refq = pd.read_csv(ref_sum, sep="\t", comment="#").head(40).to_html(index=False, border=0)
+        except Exception:
+            refq = ""
+    sections.append(Section("reference", "2. Reference quality", refq,
+                            links=[("reference tables", rel(H.OUT_REFERENCE_DIR))]))
+
+    sections.append(Section("input", "3. Input data",
+                            "<p>Bulk pseudobulk mixtures and a 10x Visium section "
+                            "(see the linked detailed reports).</p>"))
+
+    bulk_links = [("detailed bulk report", rel(H.OUT_BULK_DIR / "report.html"))] \
+        if (H.OUT_BULK_DIR / "report.html").exists() else []
+    sections.append(Section("bulk", "4. Bulk results",
+                            "<p>RNA-derived mRNA proportions (not cell fractions).</p>",
+                            links=bulk_links))
+
+    spatial_links = [("detailed spatial report", rel(H.OUT_SPATIAL_DIR / "report.html"))] \
+        if (H.OUT_SPATIAL_DIR / "report.html").exists() else []
+    sections.append(Section("spatial", "5. Spatial results",
+                            "<p>Spot-level RNA-derived composition (not cell counts).</p>",
+                            links=spatial_links))
+
+    hier_dir = H.OUTPUTS_DIR / "hierarchical"
+    hmd = hier_dir / "hierarchical_summary.md"
+    hbody = "<pre>" + T.escape(_read_text(hmd)) + "</pre>" if hmd.exists() else ""
+    hlinks = [("hierarchical tables", rel(hier_dir))] if hier_dir.exists() else []
+    sections.append(Section("hierarchical", "6. Hierarchical broad→fine results",
+                            hbody, links=hlinks))
+
+    res_dir = H.OUT_RESOLUTION_DIR
+    rlinks = [("resolution / separability / spillover", rel(res_dir))] if res_dir.exists() else []
+    sections.append(Section("resolution", "7. Resolution, separability & spillover",
+                            "<p>Pairwise separability and spillover diagnostics.</p>",
+                            links=rlinks))
+
+    bench = H.HARNESS_DIR.parent.parent / "benchmarks" / "outputs" / "benchmark_summary_report.html"
+    blinks = [("benchmark summary report", rel(bench))] if bench.exists() else []
+    sections.append(Section("benchmark", "8. Benchmark comparison",
+                            "<p>Comparison of TissueResolve (flat + hierarchical) "
+                            "against baselines and external tools. Accuracy is "
+                            "reported only where ground truth exists.</p>",
+                            links=blinks))
+
+    warns = H.OUT_SUMMARY_DIR / "warnings.json"
+    wbody = ""
+    if warns.exists():
+        try:
+            w = json.loads(_read_text(warns))
+            items = w if isinstance(w, list) else w.get("warnings", [])
+            wbody = ("<div class='warn'><ul>" + "".join(
+                f"<li>{T.escape(str(x))}</li>" for x in items[:50]) + "</ul></div>") \
+                if items else "<p>No warnings recorded.</p>"
+        except Exception:
+            wbody = ""
+    sections.append(Section("warnings", "9. Warnings & recommended actions", wbody))
+
+    figs = []
+    for d in (H.OUT_BULK_DIR, H.OUT_SPATIAL_DIR):
+        figs += sorted((d / "figures").glob("*.html")) if (d / "figures").exists() else []
+    fbody = ("<ul>" + "".join(f"<li><a href='{rel(f)}'>{f.name}</a></li>"
+                              for f in figs[:60]) + "</ul>") if figs else ""
+    sections.append(Section("figures", "10. Publication figures", fbody))
+
+    methods = H.OUT_SUMMARY_DIR / "methods.txt"
+    sections.append(Section("methods", "11. Methods",
+                            "<pre>" + T.escape(_read_text(methods)) + "</pre>"
+                            if methods.exists() else ""))
+
+    out_files = sorted(p for p in out_dir.rglob("*.tsv"))[:80]
+    obody = ("<ul>" + "".join(f"<li>{rel(p)}</li>" for p in out_files) + "</ul>") \
+        if out_files else ""
+    sections.append(Section("outputs", "12. Output files", obody))
+
+    path = build_unified_report(
+        out_dir / "report.html", sections,
+        title="TissueResolve — breast-cancer analysis report",
+        subtitle="One page; click a section above. Detailed sub-reports are linked.")
+    return path
+
+
 def main(argv: list[str] | None = None) -> int:
     argparse.ArgumentParser(description=__doc__).parse_args(argv)
     H.ensure_dirs()
@@ -494,12 +599,41 @@ def main(argv: list[str] | None = None) -> int:
         generated.append(spatial_path)
     generated.append(generate_combined_report())
     _write_report_bundle_artifacts(bulk_warns, spatial_warns, bulk_meta, spatial_meta)
+    unified = generate_unified_report()
+    generated.append(unified)
+    _write_output_index()
 
     print("Generated reports:")
     for p in generated:
         print(f"  {p}")
+    print(f"\n>>> MAIN REPORT: {unified}")
     print(f"Bundle metadata: {H.OUT_SUMMARY_DIR / 'warnings.json'}, {H.OUT_SUMMARY_DIR / 'run_metadata.json'}")
     return 0
+
+
+def _write_output_index() -> None:
+    """Write a short index.html + README.md at the outputs root ('where are my results')."""
+    idx = H.OUTPUTS_DIR / "index.html"
+    idx.write_text(
+        "<!doctype html><meta charset='utf-8'><title>TissueResolve outputs</title>"
+        "<h1>TissueResolve outputs</h1><ul>"
+        "<li><a href='report.html'><b>report.html</b> — main unified report (start here)</a></li>"
+        "<li><a href='validation_summary/report.html'>validation_summary/report.html</a></li>"
+        "<li><a href='bulk/report.html'>bulk/report.html</a></li>"
+        "<li><a href='spatial/report.html'>spatial/report.html</a></li>"
+        "<li>hierarchical/ — broad→fine tables</li>"
+        "<li>reference/, resolution/ — reference and diagnostics</li>"
+        "</ul>", encoding="utf-8")
+    (H.OUTPUTS_DIR / "README.md").write_text(
+        "# TissueResolve outputs\n\n"
+        "**Start here:** `report.html` (unified report with section navigation).\n\n"
+        "- `report.html` — main report (reference, bulk, spatial, hierarchical, "
+        "benchmark, warnings, figures, methods, outputs)\n"
+        "- `bulk/`, `spatial/` — detailed per-modality reports + tables/figures\n"
+        "- `hierarchical/` — broad→fine proportions, unresolved mass, QC\n"
+        "- `reference/`, `resolution/` — reference summary and diagnostics\n"
+        "- `validation_summary/` — warnings.json, run_metadata.json, methods.txt\n",
+        encoding="utf-8")
 
 
 if __name__ == "__main__":

@@ -57,38 +57,38 @@ def deconv_bulk(
     from tissueresolve.config import TissueResolveConfig
     from tissueresolve.bulk.pipeline import BulkPipeline
 
+    import warnings as _warnings
+
     cfg = config or TissueResolveConfig()
     if hasattr(cfg, "resolution") and resolution_mode is None:
         resolution_mode = getattr(cfg.resolution, "resolution_mode", None)
-    resolution_mode = resolution_mode or "suggest"
+    resolution_mode = resolution_mode or "auto"
+    if resolution_mode == "flat":
+        resolution_mode = "none"
     if resolution_mode not in ("none", "suggest", "auto", "hierarchical"):
         raise ValueError(
-            "resolution_mode must be one of: none, suggest, auto, hierarchical"
+            "resolution_mode must be one of: auto, hierarchical, flat, none, suggest"
         )
+
+    # auto: prefer hierarchical broad→fine when a hierarchy mapping is available,
+    # otherwise fall back to flat (fine-only) with a caution.
+    if resolution_mode == "auto":
+        if hierarchy_mapping is not None:
+            resolution_mode = "hierarchical"
+        else:
+            _warnings.warn(
+                "deconv_bulk(resolution_mode='auto'): no hierarchy_mapping was "
+                "provided, so flat (fine-only) deconvolution is used.  Provide a "
+                "fine→broad mapping to enable the recommended hierarchical "
+                "broad→fine workflow.", stacklevel=2)
+            result = BulkPipeline(cfg).run(bulk, ref, **kwargs)
+            result.deconv.run_metadata["resolution_mode"] = "none"
+            result.deconv.run_metadata["resolution_mode_requested"] = "auto"
+            return result
 
     if resolution_mode in ("none", "suggest"):
         result = BulkPipeline(cfg).run(bulk, ref, **kwargs)
         result.deconv.run_metadata["resolution_mode"] = resolution_mode
-        return result
-
-    if resolution_mode == "auto":
-        from tissueresolve.reference.separability import compute_separability
-        from tissueresolve.reference.resolution import (
-            ResolutionConfig,
-            assign_resolution_families,
-        )
-        from tissueresolve.reference.hierarchy import merge_reference_cell_types
-
-        sep_report = compute_separability(ref, warn_threshold=0.90,
-                                          raise_on_critical=False)
-        cfg_res = ResolutionConfig(resolution_mode=resolution_mode)
-        mapping = assign_resolution_families(sep_report, list(ref.cell_types), cfg_res)
-        merged_ref = merge_reference_cell_types(ref, mapping)
-        result = BulkPipeline(cfg).run(bulk, merged_ref, **kwargs)
-        for md in (result.deconv.run_metadata, result.run_metadata):
-            md["resolution_mode"] = resolution_mode
-            md["resolution_mapping"] = mapping
-            md["merge_stage"] = "pre_deconvolution"
         return result
 
     # ---- hierarchical mode ----
@@ -133,43 +133,40 @@ def deconv_spatial(
     from tissueresolve.config import TissueResolveConfig
     from tissueresolve.spatial.pipeline import SpatialPipeline
 
+    import warnings as _warnings
+
     cfg = config or TissueResolveConfig()
     if hasattr(cfg, "resolution") and resolution_mode is None:
         resolution_mode = getattr(cfg.resolution, "resolution_mode", None)
-    resolution_mode = resolution_mode or "suggest"
+    resolution_mode = resolution_mode or "auto"
+    if resolution_mode == "flat":
+        resolution_mode = "none"
     if resolution_mode not in ("none", "suggest", "auto", "hierarchical"):
         raise ValueError(
-            "resolution_mode must be one of: none, suggest, auto, hierarchical"
+            "resolution_mode must be one of: auto, hierarchical, flat, none, suggest"
         )
+
+    if resolution_mode == "auto":
+        if hierarchy_mapping is not None:
+            resolution_mode = "hierarchical"
+        else:
+            _warnings.warn(
+                "deconv_spatial(resolution_mode='auto'): no hierarchy_mapping was "
+                "provided, so flat (fine-only) deconvolution is used.  Provide a "
+                "fine→broad mapping to enable the recommended hierarchical "
+                "broad→fine workflow.", stacklevel=2)
+            result = SpatialPipeline(cfg).run(
+                Y, ref, array_row, array_col, lib_sizes, gene_names, spot_ids,
+                **kwargs)
+            result.deconv.run_metadata["resolution_mode"] = "none"
+            result.deconv.run_metadata["resolution_mode_requested"] = "auto"
+            return result
 
     if resolution_mode in ("none", "suggest"):
         result = SpatialPipeline(cfg).run(
             Y, ref, array_row, array_col, lib_sizes, gene_names, spot_ids, **kwargs
         )
         result.deconv.run_metadata["resolution_mode"] = resolution_mode
-        return result
-
-    if resolution_mode == "auto":
-        from tissueresolve.reference.separability import compute_separability
-        from tissueresolve.reference.resolution import (
-            ResolutionConfig,
-            assign_resolution_families,
-        )
-        from tissueresolve.reference.hierarchy import merge_reference_cell_types
-
-        sep_report = compute_separability(ref, warn_threshold=0.90,
-                                          raise_on_critical=False)
-        cfg_res = ResolutionConfig(resolution_mode=resolution_mode)
-        mapping = assign_resolution_families(sep_report, list(ref.cell_types), cfg_res)
-        merged_ref = merge_reference_cell_types(ref, mapping)
-        result = SpatialPipeline(cfg).run(
-            Y, merged_ref, array_row, array_col, lib_sizes, gene_names,
-            spot_ids, **kwargs
-        )
-        for md in (result.deconv.run_metadata, result.run_metadata):
-            md["resolution_mode"] = resolution_mode
-            md["resolution_mapping"] = mapping
-            md["merge_stage"] = "pre_deconvolution"
         return result
 
     # ---- hierarchical mode ----

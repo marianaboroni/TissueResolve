@@ -64,6 +64,13 @@ realdata = [
     # Kept out of [all] because it is a heavy, opt-in dependency.
     "cellxgene-census",
 ]
+benchmark = [
+    # Optional benchmark harness (benchmarks/).  The benchmark runs with only
+    # internal baselines using the core deps; these extras enable richer plots.
+    # External comparison tools (MuSiC, RCTD, cell2location, …) are installed
+    # separately and skipped gracefully when absent.
+    "plotly>=5.18",
+]
 all = [
     "tissueresolve[spatial,report,plots,dev]",
 ]
@@ -78,7 +85,7 @@ where = ["src"]
 tissueresolve = ["data/gene_lists/*.tsv", "data/gene_lists/*.txt"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "examples/real_breast_cancer/tests"]
+testpaths = ["tests", "examples/real_breast_cancer/tests", "benchmarks/tests"]
 addopts = "-v --tb=short"
 
 [tool.coverage.run]

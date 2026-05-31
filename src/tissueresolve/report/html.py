@@ -108,6 +108,9 @@ def _generate_bulk_report_from_result(
     ))
     parts.append(_warning_box(warnings))
 
+    res_html = _resolution_mode_html(result)
+    if res_html is not None:
+        parts.append(_section("Resolution mode", res_html))
     parts.append(_section("Input summary", _kv_table({
         "samples": deconv.n_samples,
         "cell types": deconv.n_cell_types,
@@ -206,6 +209,9 @@ def _generate_spatial_report_from_result(
     ))
     parts.append(_warning_box(warnings))
 
+    res_html = _resolution_mode_html(result)
+    if res_html is not None:
+        parts.append(_section("Resolution mode", res_html))
     parts.append(_section("Input summary", _kv_table({
         "spots": deconv.n_spots,
         "cell types": deconv.n_cell_types,
@@ -268,6 +274,29 @@ def _generate_spatial_report_from_result(
 # ---------------------------------------------------------------------------
 # Hierarchical (broad-to-fine) section
 # ---------------------------------------------------------------------------
+
+
+def _resolution_mode_html(result: Any) -> Optional[str]:
+    """Render a short statement of whether the run was flat or hierarchical."""
+    meta = getattr(result, "run_metadata", {}) or {}
+    mode = meta.get("resolution_mode")
+    if mode is None:
+        deconv = getattr(result, "deconv", None)
+        mode = getattr(deconv, "run_metadata", {}).get("resolution_mode") if deconv else None
+    if mode is None:
+        return None
+    is_hier = (mode == "hierarchical") or (getattr(result, "estimates", None) is not None)
+    label = "hierarchical (broad → fine)" if is_hier else f"flat ({mode})"
+    reason = meta.get("resolution_mode_reason")
+    body = (f"<p>This run used <b>{_html.escape(label)}</b> deconvolution.</p>")
+    if reason:
+        body += f"<p class='caption'>Reason: {_html.escape(str(reason))}</p>"
+    if not is_hier:
+        body += ("<p class='caption'>Flat mode estimates all fine cell types at "
+                 "once.  When broad/fine annotations are available, hierarchical "
+                 "broad→fine mode is recommended (it reduces spillover between "
+                 "similar subpopulations).</p>")
+    return body
 
 
 def _hierarchical_html(result: Any, modality: str) -> Optional[str]:

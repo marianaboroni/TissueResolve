@@ -1,12 +1,20 @@
 # TissueResolve
 
-**TissueResolve:** spillover-aware deconvolution for bulk RNA-seq and 10x Visium
+**TissueResolve:** resolution-aware deconvolution for bulk RNA-seq and 10x Visium
 spatial transcriptomics.
 
 TissueResolve estimates RNA-derived cell-type and cell-state composition using a
-shared single-cell reference layer for both bulk and spatial workflows.
-It combines protocol-aware gene selection, robust QC, separability diagnostics,
-spillover-aware interpretation, and publication-ready HTML reports.
+shared single-cell (or single-nucleus) reference layer for both bulk and spatial
+workflows. It combines protocol-aware gene selection, robust QC, separability
+and spillover diagnostics, normalization/library/batch awareness, and
+publication-ready HTML reports.
+
+When the reference carries **broad** and **fine** cell-type annotations,
+TissueResolve uses **hierarchical broad→fine** deconvolution by default
+(`--resolution-mode auto`): it estimates broad cell-type families first, then
+fine subpopulations within each family, and reports `unresolved_<family>` mass
+where subtypes are not separable. Flat (fine-only) deconvolution remains
+available but must be requested explicitly (`--resolution-mode flat`).
 
 ## What TissueResolve does
 
@@ -27,11 +35,49 @@ spillover-aware interpretation, and publication-ready HTML reports.
 - Explicit bulk mRNA-proportion output warnings.
 - Spatial graph-aware Visium modeling and neighborhood statistics.
 - Family-aware handling of non-separable cell types.
-- Hierarchical broad→fine deconvolution with explicit unresolved-mass reporting.
+- Hierarchical broad→fine deconvolution (default when broad/fine labels exist)
+  with explicit unresolved-mass reporting.
+- Normalization-, protocol-, library-type-, and batch-aware diagnostics.
 - Reproducible, family-aware colour map shared across all figures.
 - Plotly HTML reports with saved figure source data.
+- Optional benchmark harness comparing against external bulk and spatial tools.
 - Real-data breast cancer validation harness kept separate from the default
   offline test suite.
+
+## How TissueResolve differs from existing tools
+
+TissueResolve is **not intended to replace every specialized method**. Instead,
+it provides a unified, report-oriented, resolution-aware framework that makes
+protocol compatibility, normalization, batch effects, separability, spillover,
+and uncertainty **explicit** — rather than always forcing fine subtype
+estimates. It is not claimed to be universally more accurate.
+
+| Feature | TissueResolve | Bulk tools (MuSiC / Bisque / DWLS / CIBERSORTx) | Spatial tools (RCTD / cell2location / stereoscope / SPOTlight) | BayesPrism-like broad→fine |
+|---|---|---|---|---|
+| Bulk RNA-seq support | ✅ | ✅ | — | partial |
+| Spatial transcriptomics support | ✅ | — | ✅ | partial |
+| Same reference for bulk + spatial | ✅ | — | — | — |
+| Protocol/library-aware decisions | ✅ | partial | partial | — |
+| Normalization-aware workflow | ✅ | varies | varies | varies |
+| scRNA/snRNA/mixed reference diagnostics | ✅ | — | — | — |
+| Batch-effect diagnostics | ✅ | — | partial | — |
+| Donor/batch-aware marker stability | ✅ | partial | — | — |
+| Protocol-aware gene filtering/weighting | ✅ | partial | — | — |
+| Explicit mRNA-proportion warning | ✅ | rarely | n/a | — |
+| Spatial graph-aware modeling | ✅ | — | ✅ | — |
+| H&E overlay reporting | ✅ | — | partial | — |
+| Separability diagnostics | ✅ | — | partial | — |
+| Spillover matrix/report | ✅ | — | partial | — |
+| Hierarchical broad→fine mode | ✅ | — | — | ✅ |
+| Unresolved family mass / abstention | ✅ | — | — | partial |
+| Publication HTML report | ✅ | partial | partial | — |
+| Source data for every figure | ✅ | — | — | — |
+| Real-data validation harness | ✅ | — | — | — |
+| Optional external benchmarking | ✅ | — | — | — |
+
+(“partial” = available in some tools/configurations; “varies” = depends on the
+specific tool. This table is a high-level orientation, not a claim that
+TissueResolve outperforms these tools on any given dataset.)
 
 ## Installation
 
@@ -48,7 +94,7 @@ python -m pytest -q
 For finer dependency control:
 
 ```bash
-python -m pip install -e ".[spatial,report,realdata]"
+python -m pip install -e ".[spatial,report,realdata,benchmark]"
 ```
 
 ## Quickstart
@@ -136,6 +182,25 @@ Runs produce:
 - `warnings.json` — warnings and issues
 - `methods.txt` — methods text for reports
 
+## Where are my results?
+
+Open **one** file:
+
+- **`outputs/report.html`** — the unified report with section navigation
+  (executive summary, reference quality, input, bulk, spatial, hierarchical,
+  resolution/spillover, benchmark, warnings, figures, methods, output files).
+
+Supporting locations (you usually don't need to open these directly):
+
+- `outputs/tables/`, `outputs/figures/`, `outputs/methods.txt`,
+  `outputs/run_metadata.json`
+- detailed sub-reports: `outputs/bulk/report.html`,
+  `outputs/spatial/report.html`, `outputs/hierarchical/`
+- benchmarks: `benchmarks/outputs/benchmark_summary_report.html`
+
+Each output directory also has an `index.html` / `README.md` pointing to the
+main report. You should not have to hunt through folders.
+
 ## Reports and figures
 
 The reporting layer embeds:
@@ -174,6 +239,37 @@ requested.
 Scripts include data download, reference building, pseudobulk generation,
 bulk validation, spatial validation, and report generation.
 
+## Benchmarking
+
+An optional, offline-first benchmark harness lives in `benchmarks/`. It compares
+TissueResolve (flat + hierarchical) against internal baselines and, when
+installed, external bulk tools (MuSiC, Bisque, DWLS, CIBERSORTx-export) and
+spatial tools (RCTD, cell2location, stereoscope, SPOTlight, Tangram). Missing
+external tools are skipped gracefully with an install hint; one missing tool
+never fails the run.
+
+```bash
+# plan only (which methods run / are skipped)
+python benchmarks/bulk/run_bulk_benchmark.py --dry-run
+python benchmarks/spatial/run_spatial_benchmark.py --dry-run
+
+# toy synthetic data with ground truth (fast, fully offline)
+python benchmarks/run_all.py --toy
+
+# existing real breast-cancer harness outputs (no download)
+python benchmarks/bulk/run_bulk_benchmark.py --use-existing-real-data
+python benchmarks/spatial/run_spatial_benchmark.py --use-existing-real-data
+```
+
+The harness reports normalization decisions, protocol/library detection,
+scRNA/snRNA/mixed reference comparisons, batch diagnostics, and flat-vs-
+hierarchical comparisons, and writes a single linked
+`benchmark_summary_report.html`. Bulk pseudobulk and synthetic spatial have
+ground truth (accuracy is reported); real Visium has none (concordance,
+spatial structure, stability, runtime, and failure modes are reported instead).
+See [docs/benchmarking.md](docs/benchmarking.md). Benchmark outputs are
+git-ignored and never committed.
+
 ## Documentation
 
 See the documentation pages in `docs/`:
@@ -184,6 +280,10 @@ See the documentation pages in `docs/`:
 - `docs/advanced_parameters.md`
 - `docs/reporting.md`
 - `docs/output_interpretation.md`
+- `docs/benchmarking.md`
+- `docs/normalization_and_protocols.md`
+- `docs/batch_effects.md`
+- `docs/library_type_references.md`
 
 ## Status
 

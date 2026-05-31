@@ -1,0 +1,8 @@
+# Spatial benchmark configuration
+data_source: toy            # toy | real_breast_cancer
+include_external: true       # RCTD, cell2location, stereoscope, SPOTlight, Tangram
+max_spots: 600               # subsample cap for real Visium (logged, not silent)
+seed: 0
+# Real Visium has no ground truth: report concordance/structure/stability, not accuracy.
+metrics_real: [concordance, mean_entropy, near_zero_fraction, morans_i, runtime]
+metrics_synthetic: [pearson, spearman, rmse, mae, dominant_acc]
