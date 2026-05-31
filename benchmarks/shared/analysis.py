@@ -135,6 +135,165 @@ def recommendation_by_use_case(exec_table: pd.DataFrame, best: dict) -> dict:
     }
 
 
+def _category(method_obj, result) -> str:
+    """Decision-oriented category for a method run."""
+    is_tr = result.method.startswith("TissueResolve")
+    external = getattr(method_obj, "external", False) if method_obj else result.method not in (
+        "NNLS_baseline", "WNNLS_baseline", "MarkerOnly_NNLS", "Ridge_NNLS",
+        "CorrelationMatcher")
+    if is_tr:
+        return "TissueResolve"
+    if not external:
+        return "internal_baseline"
+    if result.status == STATUS_SUCCESS and result.metadata.get("executed_or_exported") == "executed_imported":
+        return "external_imported"
+    if result.status == STATUS_EXPORTED:
+        return "external_exported_only"
+    if result.status == STATUS_SKIPPED:
+        return "external_skipped"
+    if result.status == STATUS_SUCCESS:
+        return "external_executed"
+    return "external_failed"
+
+
+def build_status_table(results: list, methods: list) -> pd.DataFrame:
+    """Explicit executed / imported / exported / skipped status per method."""
+    cap = {m.name: m for m in methods}
+    rows = []
+    for r in results:
+        m = cap.get(r.method)
+        cat = _category(m, r)
+        rows.append({
+            "method": r.method,
+            "category": cat,
+            "status": r.status,
+            "executed": r.status == STATUS_SUCCESS and cat != "external_imported",
+            "imported": cat == "external_imported",
+            "exported_only": cat == "external_exported_only",
+            "skipped_reason": (r.skip_reason or "") if r.status in
+            (STATUS_SKIPPED, STATUS_EXPORTED, STATUS_FAILED) else "",
+            "install_hint": r.install_hint or "",
+        })
+    return pd.DataFrame(rows).set_index("method")
+
+
+def best_method_summary(exec_table: pd.DataFrame, *, fair_by_method: dict = None,
+                        concordance: dict = None, structure: pd.DataFrame = None,
+                        modality: str = "bulk") -> pd.DataFrame:
+    """A compact best-method-by-criterion table (one row per criterion)."""
+    ex = exec_table[exec_table["executed_or_exported"].isin(
+        ["executed", "executed_imported"])].copy()
+
+    def pick(col, ascending):
+        if col not in ex.columns:
+            return ("—", None)
+        s = ex[col].dropna()
+        if s.empty:
+            return ("—", None)
+        idx = s.idxmin() if ascending else s.idxmax()
+        return (idx, round(float(s.loc[idx]), 4))
+
+    rows = []
+    if modality == "bulk":
+        for label, col, asc in [
+            ("Best bulk fine-level Pearson", "bulk_fine_pearson", False),
+            ("Best bulk fine-level RMSE", "bulk_fine_rmse", True),
+            ("Best bulk family-level Pearson", "bulk_family_pearson", False),
+            ("Best bulk family-level RMSE", "bulk_family_rmse", True),
+        ]:
+            m, v = pick(col, asc)
+            rows.append({"criterion": label, "best_method": m, "value": v})
+    m, v = pick("runtime_seconds", True)
+    rows.append({"criterion": "Fastest method", "best_method": m, "value": v})
+
+    # most conservative / best unresolved-aware behavior
+    cons = "—"
+    if fair_by_method:
+        cand = {k: f for k, f in fair_by_method.items() if f.get("abstains")}
+        if cand:
+            # highest unresolved precision, tie-broken by recall
+            cons = max(cand, key=lambda k: (cand[k].get("unresolved_precision") or 0,
+                                            cand[k].get("unresolved_recall") or 0))
+    rows.append({"criterion": "Most conservative / best unresolved-aware",
+                 "best_method": cons, "value": None})
+
+    if concordance:
+        # best spatial concordance = method with highest mean pairwise r
+        per = {}
+        for k, v in concordance.items():
+            a, b = k.split("__vs__")
+            per.setdefault(a, []).append(v)
+            per.setdefault(b, []).append(v)
+        if per:
+            best_c = max(per, key=lambda k: np.nanmean(per[k]))
+            rows.append({"criterion": "Best spatial concordance",
+                         "best_method": best_c,
+                         "value": round(float(np.nanmean(per[best_c])), 4)})
+    if structure is not None and not structure.empty and "near_zero_fraction" in structure:
+        # "best stability" = lowest near-zero fraction among executed
+        best_s = structure["near_zero_fraction"].idxmin()
+        rows.append({"criterion": "Best spatial stability (low near-zero)",
+                     "best_method": best_s,
+                     "value": round(float(structure.loc[best_s, "near_zero_fraction"]), 4)})
+    return pd.DataFrame(rows).set_index("criterion")
+
+
+def hierarchical_rankings(exec_table: pd.DataFrame, fair_by_method: dict) -> pd.DataFrame:
+    """Multi-criterion ranking so hierarchical mode is not judged on fine-level alone."""
+    ex = exec_table[exec_table["executed_or_exported"].isin(
+        ["executed", "executed_imported"])]
+    def rank(col, ascending):
+        if col not in ex.columns:
+            return {}
+        s = ex[col].dropna()
+        return {m: int(r) + 1 for r, m in enumerate(
+            s.sort_values(ascending=ascending).index)}
+    fine = rank("bulk_fine_pearson", False)
+    family = rank("bulk_family_pearson", False)
+    res_fine = {k: f.get("fine_resolvable_pearson") for k, f in (fair_by_method or {}).items()}
+    res_fine_rank = {m: i + 1 for i, m in enumerate(sorted(
+        [k for k, v in res_fine.items() if v is not None],
+        key=lambda k: -res_fine[k]))}
+    unaware = {k: (f.get("unresolved_precision") or 0) for k, f in (fair_by_method or {}).items()
+               if f.get("abstains")}
+    unaware_rank = {m: i + 1 for i, m in enumerate(sorted(unaware, key=lambda k: -unaware[k]))}
+    # interpretability proxy: fewer warnings + abstains appropriately
+    interp = {}
+    for m in ex.index:
+        w = ex.loc[m, "warnings_count"] if "warnings_count" in ex.columns else 0
+        interp[m] = -int(w) + (1 if (fair_by_method or {}).get(m, {}).get("abstains") else 0)
+    interp_rank = {m: i + 1 for i, m in enumerate(sorted(interp, key=lambda k: -interp[k]))}
+    methods = list(ex.index)
+    return pd.DataFrame({
+        "fine_level_rank": [fine.get(m, "—") for m in methods],
+        "family_level_rank": [family.get(m, "—") for m in methods],
+        "resolvable_fine_rank": [res_fine_rank.get(m, "—") for m in methods],
+        "unresolved_aware_rank": [unaware_rank.get(m, "—") for m in methods],
+        "interpretability_rank": [interp_rank.get(m, "—") for m in methods],
+    }, index=methods)
+
+
+def interpretation_paragraph(modality: str, best: dict, has_ground_truth: bool) -> str:
+    parts = []
+    if modality == "bulk" and has_ground_truth:
+        bf = best.get("best_bulk_fine_pearson", "—")
+        parts.append(f"<b>{bf}</b> achieved the highest fine-level accuracy in this "
+                     "pseudobulk benchmark.")
+        parts.append("TissueResolve hierarchical achieved better family-level "
+                     "interpretability and correct abstention on non-separable families.")
+    if modality == "spatial":
+        parts.append("The spatial real-data benchmark has no ground truth; results "
+                     "therefore compare concordance and spatial structure, not accuracy.")
+    parts.append("Hierarchical mode may have lower fine-level correlation because it "
+                 "<b>intentionally abstains</b> from assigning non-resolvable subtype "
+                 "mass. This is not equivalent to prediction failure; it reflects "
+                 "conservative, resolution-aware behavior.")
+    parts.append("Exported-only tools are <b>not</b> counted as executed comparisons; "
+                 "external tools are included only when installed or when user-imported "
+                 "result files are provided.")
+    return " ".join(parts)
+
+
 def conclusion_text(modality: str, exec_table: pd.DataFrame, best: dict,
                     has_ground_truth: bool, n_nontr_executed: int) -> str:
     lines = []

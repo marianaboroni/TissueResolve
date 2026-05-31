@@ -56,11 +56,17 @@ def cli() -> None:
                    "Use when the reference has only fine labels.")
 @click.option("--allow-unresolved/--no-allow-unresolved", default=True,
               help="Keep non-separable families at the broad level as unresolved mass.")
+@click.option("--solver",
+              type=click.Choice(["auto", "nnls", "weighted_nnls", "marker_nnls",
+                                 "ridge_nnls", "ensemble_nnls", "pipeline"]),
+              default="auto", show_default=True,
+              help="Bulk solver backbone. 'auto' picks the best by gene-masking CV; "
+                   "'pipeline' uses the protocol-aware weighted pipeline.")
 @click.option("--preset", type=click.Choice(["quick", "standard", "publication", "diagnostic"]), default="standard")
 @click.option("--dry-run", is_flag=True, default=False)
 def run_cli(reference: str, query: str, out: str, mode: str, resolution_mode: str,
             broad_cell_type_col: str, fine_cell_type_col: str,
-            hierarchy_path: str | None, allow_unresolved: bool,
+            hierarchy_path: str | None, allow_unresolved: bool, solver: str,
             preset: str, dry_run: bool) -> None:
     """User-friendly top-level run: auto-detect inputs, write analysis plan, optionally run pipelines."""
     rc = _run_top_level(
@@ -69,6 +75,7 @@ def run_cli(reference: str, query: str, out: str, mode: str, resolution_mode: st
         fine_cell_type_col=fine_cell_type_col,
         hierarchy_path=hierarchy_path,
         allow_unresolved=allow_unresolved,
+        solver=solver,
         dry_run=dry_run,
     )
     if rc != 0:
@@ -87,6 +94,7 @@ def _run_top_level(
     fine_cell_type_col: str = "auto",
     hierarchy_path: str | None = None,
     allow_unresolved: bool = True,
+    solver: str = "auto",
     dry_run: bool = False,
 ) -> int:
     outp = Path(out)
@@ -139,6 +147,7 @@ def _run_top_level(
         "preset": preset,
         "preset_params": preset_params,
         "protocol": proto,
+        "solver": solver,
     }
     if resolution_mode == "hierarchical":
         plan["hierarchical"] = {
@@ -172,7 +181,7 @@ def _run_top_level(
     if resolved_mode == "bulk":
         result = _execute_bulk(
             reference, query, outp, cfg, resolution_mode=resolution_mode,
-            hierarchy_path=hierarchy_path)
+            hierarchy_path=hierarchy_path, solver=solver)
     else:
         result = _execute_spatial(
             reference, query, outp, cfg, resolution_mode=resolution_mode,
@@ -388,7 +397,7 @@ def _load_reference_signature(path: Path, cfg, estimate_overdispersion: bool = F
 
 
 def _execute_bulk(reference: str, query: str, outp: Path, cfg, resolution_mode: str,
-                  *, hierarchy_path: str | None = None):
+                  *, hierarchy_path: str | None = None, solver: str = "auto"):
     from tissueresolve.api import deconv_bulk
 
     ref_path = Path(reference)
@@ -405,12 +414,17 @@ def _execute_bulk(reference: str, query: str, outp: Path, cfg, resolution_mode: 
         click.echo(f"Hierarchy source: {source}")
 
     bulk = _read_counts_table(Path(query))
+    # solver backbone applies to flat (non-hierarchical) runs; 'pipeline' or
+    # hierarchical mode use the protocol-aware weighted pipeline.
+    solver_arg = None if (solver in (None, "pipeline") or
+                          resolution_mode == "hierarchical") else solver
     result = deconv_bulk(
         bulk,
         ref,
         config=cfg,
         resolution_mode=resolution_mode,
         hierarchy_mapping=hierarchy_mapping,
+        solver=solver_arg,
         n_bootstrap=cfg.bootstrap.n_bootstrap,
     )
 
@@ -498,6 +512,10 @@ def run(argv: list | None = None) -> int:
                         action="store_true", default=True)
     parser.add_argument("--no-allow-unresolved", dest="allow_unresolved",
                         action="store_false")
+    parser.add_argument("--solver",
+                        choices=("auto", "nnls", "weighted_nnls", "marker_nnls",
+                                 "ridge_nnls", "ensemble_nnls", "pipeline"),
+                        default="auto")
     parser.add_argument("--preset", choices=("quick", "standard", "publication", "diagnostic"), default="standard")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
@@ -513,6 +531,7 @@ def run(argv: list | None = None) -> int:
         fine_cell_type_col=args.fine_cell_type_col,
         hierarchy_path=args.hierarchy_path,
         allow_unresolved=args.allow_unresolved,
+        solver=args.solver,
         dry_run=args.dry_run,
     )
 

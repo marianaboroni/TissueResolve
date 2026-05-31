@@ -396,3 +396,69 @@ def test_within_family_marker_panels(hier_ref):
     assert "FamZ" not in panels
     assert set(disc.columns) == {"family", "gene", "resolution_score",
                                  "best_pair", "abs_log2fc", "leakage"}
+
+
+# ---------------------------------------------------------------------------
+# Partial hierarchical resolution (Part 3)
+# ---------------------------------------------------------------------------
+
+
+def _partial_ref():
+    rng = np.random.default_rng(0)
+    G = 120
+    genes = [f"g{i}" for i in range(G)]
+
+    def prof(a, lvl=200.0):
+        v = np.full(G, 2.0); v[list(a)] = lvl; return v
+    X1 = prof(range(0, 20)); X2 = prof(range(20, 40))          # separable family
+    P1 = prof(range(40, 60))                                    # distinct in FamP
+    P2 = prof(range(60, 80)); P3 = P2 * (1 + rng.normal(0, 0.004, G))  # near-identical
+    R = np.vstack([X1, X2, P1, P2, P3]).astype(np.float32)
+    cts = ["X1", "X2", "P1", "P2", "P3"]
+    ref = ReferenceSignature(gene_names=genes, cell_types=cts, R_cpm=R,
+                             R_log=np.log1p(R).astype(np.float32),
+                             n_cells_per_type={c: 100 for c in cts})
+    mapping = {"X1": "FamX", "X2": "FamX", "P1": "FamP", "P2": "FamP", "P3": "FamP"}
+    return ref, mapping
+
+
+def test_partial_resolution_splits_confident_keeps_residual():
+    from tissueresolve.reference.hierarchy import assemble_hierarchical_estimates
+    ref, mapping = _partial_ref()
+    fam = pd.DataFrame({"FamX": [0.5], "FamP": [0.5]}, index=["s0"])
+    fine = pd.DataFrame({"X1": [0.3], "X2": [0.2], "P1": [0.2], "P2": [0.15],
+                         "P3": [0.15]}, index=["s0"])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        est = assemble_hierarchical_estimates(
+            fam, fine, ref, mapping, min_discriminating_genes=5,
+            allow_partial_resolution=True)
+    c = est.combined_fine
+    # separable family fully resolved
+    assert c["X1"].iloc[0] > 0 and c["X2"].iloc[0] > 0
+    # distinct subtype in the hard family keeps confident mass...
+    assert c["P1"].iloc[0] > 0
+    # ...while the near-identical pair is abstained (residual to unresolved)
+    assert c["P2"].iloc[0] == pytest.approx(0.0)
+    assert c["P3"].iloc[0] == pytest.approx(0.0)
+    assert "unresolved_FamP" in c.columns and c["unresolved_FamP"].iloc[0] > 0
+    # mass preserved
+    np.testing.assert_allclose(c.sum(axis=1), 1.0, atol=1e-9)
+
+
+def test_partial_resolution_mass_preserved_separable_family_no_unresolved():
+    from tissueresolve.reference.hierarchy import assemble_hierarchical_estimates
+    ref, mapping = _partial_ref()
+    fam = pd.DataFrame({"FamX": [1.0], "FamP": [0.0]}, index=["s0"])
+    fine = pd.DataFrame({"X1": [0.6], "X2": [0.4], "P1": [0.0], "P2": [0.0],
+                         "P3": [0.0]}, index=["s0"])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        est = assemble_hierarchical_estimates(
+            fam, fine, ref, mapping, min_discriminating_genes=5,
+            allow_partial_resolution=True)
+    # FamX is fully separable → its unresolved residual is ~0
+    fam_x_unresolved = est.combined_fine.get("unresolved_FamX")
+    if fam_x_unresolved is not None:
+        assert fam_x_unresolved.iloc[0] == pytest.approx(0.0, abs=1e-9)
+    np.testing.assert_allclose(est.combined_fine.sum(axis=1), 1.0, atol=1e-9)

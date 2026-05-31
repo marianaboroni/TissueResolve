@@ -258,7 +258,7 @@ def test_categorize_separates_executed_exported_skipped():
     assert any(r.method == "CIBERSORTx_export" for r in cats["exported"])
 
 
-def test_at_least_three_non_tissueresolve_executed():
+def test_at_least_four_non_tissueresolve_executed():
     ref, mapping = toy_reference()
     bulk, _ = toy_bulk(ref)
     scenario = {"reference": ref, "bulk": bulk, "hierarchy_mapping": mapping,
@@ -269,7 +269,7 @@ def test_at_least_three_non_tissueresolve_executed():
         for m in bulk_methods(include_external=False):
             if not m.name.startswith("TissueResolve") and m.run(scenario).status == "success":
                 executed_nontr += 1
-    assert executed_nontr >= 3  # NNLS, WNNLS, MarkerOnly
+    assert executed_nontr >= 4  # NNLS, WNNLS, MarkerOnly, Ridge, CorrelationMatcher
 
 
 def test_imported_results_loadable(tmp_path):
@@ -319,3 +319,77 @@ def test_readme_documents_results_location_and_simplified_workflow():
     assert "where are my results" in readme
     assert "report.html" in readme
     assert "not intended to replace every specialized method" in readme
+
+
+def test_status_table_separates_categories():
+    from benchmarks.shared.analysis import build_status_table
+    ref, mapping = toy_reference()
+    bulk, _ = toy_bulk(ref)
+    scenario = {"reference": ref, "bulk": bulk, "hierarchy_mapping": mapping,
+                "normalization_status": "counts"}
+    methods = bulk_methods(include_external=True)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        results = [m.run(scenario) for m in methods]
+    st = build_status_table(results, methods)
+    for col in ("category", "executed", "imported", "exported_only",
+                "skipped_reason", "install_hint"):
+        assert col in st.columns
+    # CIBERSORTx export is exported_only and NOT executed
+    assert bool(st.loc["CIBERSORTx_export", "exported_only"]) is True
+    assert bool(st.loc["CIBERSORTx_export", "executed"]) is False
+    # internal baselines are executed
+    assert bool(st.loc["NNLS_baseline", "executed"]) is True
+
+
+def test_best_method_summary_exists():
+    from benchmarks.shared import analysis as AN
+    ref, mapping = toy_reference()
+    bulk, truth = toy_bulk(ref)
+    scenario = {"reference": ref, "bulk": bulk, "hierarchy_mapping": mapping,
+                "normalization_status": "counts"}
+    methods = bulk_methods(include_external=False)
+    fair, fine = {}, {}
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        results = [m.run(scenario) for m in methods]
+        for r in results:
+            if r.predictions is not None:
+                fine[r.method] = M.accuracy_metrics(truth, r.predictions)
+                fair[r.method] = M.hierarchical_fair_metrics(truth, r.predictions, mapping, {"FamY"})
+    exec_table = AN.build_executive_table(results, methods, scenario, fair, fine)
+    bs = AN.best_method_summary(exec_table, fair_by_method=fair, modality="bulk")
+    crits = set(bs.index)
+    assert "Best bulk fine-level Pearson" in crits
+    assert "Best bulk family-level Pearson" in crits
+    assert "Fastest method" in crits
+    assert any("conservative" in c.lower() for c in crits)
+
+
+def test_hierarchical_rankings_include_family_and_unresolved():
+    from benchmarks.shared import analysis as AN
+    ref, mapping = toy_reference()
+    bulk, truth = toy_bulk(ref)
+    scenario = {"reference": ref, "bulk": bulk, "hierarchy_mapping": mapping,
+                "normalization_status": "counts"}
+    methods = bulk_methods(include_external=False)
+    fair, fine = {}, {}
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        results = [m.run(scenario) for m in methods]
+        for r in results:
+            if r.predictions is not None:
+                fine[r.method] = M.accuracy_metrics(truth, r.predictions)
+                fair[r.method] = M.hierarchical_fair_metrics(truth, r.predictions, mapping, {"FamY"})
+    exec_table = AN.build_executive_table(results, methods, scenario, fair, fine)
+    rk = AN.hierarchical_rankings(exec_table, fair)
+    for col in ("fine_level_rank", "family_level_rank", "resolvable_fine_rank",
+                "unresolved_aware_rank", "interpretability_rank"):
+        assert col in rk.columns
+
+
+def test_readme_external_tools_require_install_or_import():
+    from pathlib import Path
+    readme = (Path(__file__).resolve().parents[2] / "README.md").read_text().lower()
+    assert "external tools require installation or imported results" in readme
+    assert "counted as executed benchmarks" in readme

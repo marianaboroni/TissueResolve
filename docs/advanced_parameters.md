@@ -101,3 +101,39 @@ thresholds are heuristic and recorded in `run_metadata.json`.
 Presets adjust the gating strictness: `publication` is stricter
 (`min_discriminating_genes=30`, `within_family_spillover_threshold=0.25`),
 while `quick`/`diagnostic` are more permissive.
+
+## Solver backbone and accuracy (`--solver`)
+
+TissueResolve can choose its deconvolution backbone instead of competing against
+plain NNLS externally:
+
+| `--solver` | backbone |
+|---|---|
+| `auto` (default) | pick the best by gene-masking CV (see docs/gene_masking_cv.md) |
+| `nnls` | plain NNLS on all shared genes |
+| `weighted_nnls` | specificity-weighted NNLS |
+| `marker_nnls` | NNLS on a top-marker panel |
+| `ridge_nnls` | ridge-regularised non-negative |
+| `ensemble_nnls` | CV-weighted ensemble of the above |
+| `pipeline` | the protocol-aware weighted pipeline (robust default for noisy data) |
+
+The selected solver + reason are written to `analysis_plan.json`,
+`run_metadata.json`, `selected_solver.json`, and the report. On clean pseudobulk
+`auto` typically selects full-gene NNLS (highest accuracy); on protocol-mismatched
+real bulk the weighted `pipeline` is more robust.
+
+## Partial hierarchical resolution
+
+Hierarchical mode is no longer all-or-nothing. Within a broad family, subtypes
+that are confidently separable (within-family separability ≥
+`subtype_confidence_threshold`, enough discriminating genes) receive
+`family × P(subtype|family)` mass; the remaining ambiguous share becomes
+`unresolved_<family>`.
+
+| parameter | default | meaning |
+|---|---|---|
+| `allow_partial_resolution` | `true` | split confident subtypes, keep residual unresolved |
+| `subtype_confidence_threshold` | `0.10` | min within-family separability to trust a subtype |
+
+Example: `Myeloid=0.20` → `macrophage=0.08` (confident) + `unresolved_Myeloid=0.12`
+instead of forcing all 0.20 into one bucket.

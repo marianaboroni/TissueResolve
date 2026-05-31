@@ -73,6 +73,8 @@ def run_hierarchical_spatial(
     unresolved_threshold: float = 0.10,
     min_discriminating_genes: int = 10,
     within_family_spillover_threshold: float = 0.30,
+    allow_partial_resolution: bool = True,
+    subtype_confidence_threshold: float = 0.10,
     **run_kwargs,
 ) -> HierarchicalSpatialResult:
     """Run broad-to-fine hierarchical spatial deconvolution.
@@ -107,6 +109,8 @@ def run_hierarchical_spatial(
         unresolved_threshold=unresolved_threshold,
         min_discriminating_genes=min_discriminating_genes,
         within_family_spillover_threshold=within_family_spillover_threshold,
+        allow_partial_resolution=allow_partial_resolution,
+        subtype_confidence_threshold=subtype_confidence_threshold,
         extra_metadata={
             "modality": "spatial",
             "lambda_spatial_family": float(family_result.deconv.lambda_spatial),

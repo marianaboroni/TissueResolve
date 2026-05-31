@@ -32,10 +32,22 @@ import pandas as pd  # noqa: E402
 
 from benchmarks.shared.io import OUTPUTS_DIR, write_tsv  # noqa: E402
 
+# External tools whose results can be imported for a fair, executed comparison.
+KNOWN_EXTERNAL = {
+    "bulk": ["MuSiC", "BisqueRNA", "DWLS", "SCDC", "CIBERSORTx", "BayesPrism"],
+    "spatial": ["RCTD", "cell2location", "stereoscope", "SPOTlight", "Tangram",
+                "CARD", "DestVI"],
+}
+
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    epilog = ("Supported external tools to import:\n"
+              f"  bulk:    {', '.join(KNOWN_EXTERNAL['bulk'])}\n"
+              f"  spatial: {', '.join(KNOWN_EXTERNAL['spatial'])}\n"
+              "(any --method name is accepted; these are the recognised ones.)")
+    ap = argparse.ArgumentParser(
+        description=__doc__ + "\n" + epilog,
+        formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--method", required=True, help="Method name, e.g. RCTD")
     ap.add_argument("--modality", required=True, choices=("bulk", "spatial"))
     ap.add_argument("--predictions", required=True, type=Path,
@@ -53,6 +65,9 @@ def main(argv=None) -> int:
         print("ERROR: predictions must be obs × cell_type with ≥2 cell-type columns.",
               file=sys.stderr)
         return 1
+    if args.method not in KNOWN_EXTERNAL.get(args.modality, []):
+        print(f"NOTE: {args.method!r} is not in the recognised {args.modality} list "
+              f"({', '.join(KNOWN_EXTERNAL[args.modality])}); importing anyway.")
     out = args.out or (OUTPUTS_DIR / args.modality / "external" / f"{args.method}.tsv")
     write_tsv(df, out, comment=[
         f"imported external predictions: {args.method} ({args.modality})",

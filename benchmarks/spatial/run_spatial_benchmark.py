@@ -98,6 +98,9 @@ def main(argv=None) -> int:
                     help="Also compare external results imported via import_external_results.py")
     ap.add_argument("--max-spots", type=int, default=600)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--spatial-auto", dest="spatial_auto", action="store_true",
+                    default=True, help="Run lambda_spatial auto-selection (old vs improved).")
+    ap.add_argument("--no-spatial-auto", dest="spatial_auto", action="store_false")
     args = ap.parse_args(argv)
 
     methods = spatial_methods(include_external=not args.no_external)
@@ -154,11 +157,26 @@ def main(argv=None) -> int:
     cap = AN.capability_matrix(methods)
     exec_table = AN.build_executive_table(results, methods, scenario,
                                           fair_by_method, fine_by_method)
+    status_table = AN.build_status_table(results, methods)
     best = AN.best_methods(exec_table)
+    # concordance + structure (needed for best-method summary)
+    pmc, struct = {}, pd.DataFrame()
+    if len(preds) > 1:
+        pmc = M.pairwise_method_correlation(preds)
+        struct = pd.DataFrame([
+            {"method": k, "mean_entropy": float(M.proportion_entropy(v).mean()),
+             "near_zero_fraction": M.near_zero_fraction(v)}
+            for k, v in preds.items()]).set_index("method")
+    best_summary = AN.best_method_summary(exec_table, fair_by_method=fair_by_method,
+                                          concordance=pmc, structure=struct,
+                                          modality="spatial")
+    interp = AN.interpretation_paragraph("spatial", best, has_gt)
     n_nontr = sum(1 for r in cats["executed"] if not r.method.startswith("TissueResolve"))
     conclusion = AN.conclusion_text("spatial", exec_table, best, has_gt, n_nontr)
 
     write_tsv(exec_table, OUT / "executive_summary.tsv")
+    write_tsv(status_table, OUT / "method_status.tsv")
+    write_tsv(best_summary, OUT / "best_method_summary.tsv")
     write_tsv(cap, OUT / "capability_matrix.tsv")
     if family_rows:
         write_tsv(pd.DataFrame(family_rows).set_index("method"), OUT / "family_level_metrics.tsv")
@@ -167,9 +185,11 @@ def main(argv=None) -> int:
     if unresolved_rows:
         write_tsv(pd.DataFrame(unresolved_rows).set_index("method"), OUT / "unresolved_metrics.tsv")
 
-    sections = {"1. Method status": exec_table,
-                "2. Which methods were compared?": _status_summary_html(cats),
-                "3. Executed vs skipped/exported": _status_summary_html(cats),
+    sections = {"1. Best-method summary": best_summary,
+                "2. Interpretation": f"<p>{interp}</p>",
+                "3. Method status (executed / imported / exported-only / skipped)": status_table,
+                "4. Which methods were compared?": _status_summary_html(cats),
+                "5. Executive summary (per-method)": exec_table,
                 "8. Method capability matrix": cap,
                 "Method compatibility": compat}
     figdir = OUT / "figures"
@@ -178,14 +198,9 @@ def main(argv=None) -> int:
         write_tsv(metrics_df, OUT / "accuracy_metrics.tsv")
         sections["6. Accuracy (synthetic ground truth)"] = metrics_df
     if len(preds) > 1:
-        pmc = M.pairwise_method_correlation(preds)
         pmc_df = pd.DataFrame({"pair": list(pmc), "pearson": list(pmc.values())})
         write_tsv(pmc_df.set_index("pair"), OUT / "method_concordance.tsv")
         sections["7. Cross-method concordance (no ground truth)"] = pmc_df.set_index("pair")
-        struct = pd.DataFrame([
-            {"method": k, "mean_entropy": float(M.proportion_entropy(v).mean()),
-             "near_zero_fraction": M.near_zero_fraction(v)}
-            for k, v in preds.items()]).set_index("method")
         write_tsv(struct, OUT / "spatial_structure.tsv")
         sections["7b. Spatial structure / stability"] = struct
         # concordance heatmap
@@ -200,6 +215,33 @@ def main(argv=None) -> int:
                       x="method", y="near_zero_fraction",
                       title="Spatial stability: near-zero fraction by method",
                       path=figdir / "spatial_near_zero.html")
+    # spatial auto-parameter selection: old (default lambda) vs improved (auto)
+    if args.spatial_auto and "Y" in scenario:
+        try:
+            from tissueresolve.spatial.auto_params import (
+                select_lambda_spatial, save_spatial_auto_outputs)
+            import warnings as _w
+            with _w.catch_warnings():
+                _w.simplefilter("ignore")
+                best_lam, comp_lam, selected = select_lambda_spatial(
+                    scenario["Y"], scenario["reference"], scenario["array_row"],
+                    scenario["array_col"], scenario["lib_sizes"],
+                    scenario["gene_names"], scenario.get("spot_ids"),
+                    candidates=(0.0, 0.1, 0.5), max_iter=12)
+            save_spatial_auto_outputs(comp_lam, selected, OUT)
+            default_lam = 0.1
+            selected["default_lambda_spatial"] = default_lam
+            sections["10. Spatial auto-parameter selection (old vs improved)"] = (
+                f"<p>Default λ_spatial={default_lam} → auto-selected "
+                f"<b>λ_spatial={best_lam}</b>. {selected['reason']}</p>"
+                + comp_lam.to_html(border=0)
+                + f"<p class='note'>Graph diagnostics: {selected['graph_diagnostics']}. "
+                "Spatial accuracy is not claimed without ground truth — selection "
+                "balances reconstruction against over-smoothing.</p>")
+            print(f"Spatial auto: default λ=0.1 → selected λ={best_lam}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"  (spatial auto-parameter selection skipped: {exc})")
+
     sections["9. Benchmark conclusion"] = f"<p>{conclusion}</p>"
 
     PL.heatmap_figure(cap.select_dtypes("bool").astype(int) if not cap.empty else cap,

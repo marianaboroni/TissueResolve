@@ -499,11 +499,40 @@ def generate_unified_report() -> Path:
 
     ref_sum = H.OUT_REFERENCE_DIR / "reference_summary.tsv"
     refq = ""
+    # reference suitability score (PASS/CAUTION/WARNING/FAIL)
+    try:
+        import warnings as _w
+        from tissueresolve.results import ReferenceSignature
+        from tissueresolve.reference.suitability import (
+            compute_reference_suitability_score, save_reference_suitability)
+        from tissueresolve.reference.hierarchy import (
+            load_hierarchy_mapping, build_cell_type_hierarchy)
+        rdir = H.SAVED_REFERENCE_DIR
+        hmap_p = H.HARNESS_DIR / "config" / "breast_cancer_cell_type_hierarchy.tsv"
+        if rdir.exists():
+            ref0 = ReferenceSignature.load(rdir)
+            qgenes = None
+            if H.PSEUDOBULK_COUNTS.exists():
+                qgenes = list(pd.read_csv(H.PSEUDOBULK_COUNTS, sep="\t", index_col=0,
+                                          comment="#").index.map(str))
+            mp = (build_cell_type_hierarchy(list(ref0.cell_types),
+                                            load_hierarchy_mapping(hmap_p))
+                  if hmap_p.exists() else None)
+            with _w.catch_warnings():
+                _w.simplefilter("ignore")
+                suit = compute_reference_suitability_score(
+                    ref0, query_genes=qgenes, mapping=mp)
+                save_reference_suitability(suit, H.OUT_REFERENCE_DIR)
+            refq += (f"<p>Reference suitability: <b>{suit.classification}</b> "
+                     f"(score={suit.overall_score})</p>"
+                     + suit.components_frame().to_html(border=0))
+    except Exception:
+        pass
     if ref_sum.exists():
         try:
-            refq = pd.read_csv(ref_sum, sep="\t", comment="#").head(40).to_html(index=False, border=0)
+            refq += pd.read_csv(ref_sum, sep="\t", comment="#").head(40).to_html(index=False, border=0)
         except Exception:
-            refq = ""
+            pass
     sections.append(Section("reference", "2. Reference quality", refq,
                             links=[("reference tables", rel(H.OUT_REFERENCE_DIR))]))
 

@@ -9,17 +9,22 @@ __all__ = ["bulk_methods", "spatial_methods", "all_methods"]
 def bulk_methods(include_external: bool = True) -> list[BenchmarkMethod]:
     from benchmarks.bulk.methods.nnls_baseline import NNLSBaseline
     from benchmarks.bulk.methods.extra_baselines import (
-        WeightedNNLSBaseline, MarkerOnlyNNLSBaseline,
+        WeightedNNLSBaseline, MarkerOnlyNNLSBaseline, RidgeNNLSBaseline,
+        CorrelationMatcherBaseline,
     )
     from benchmarks.bulk.methods.tissueresolve import (
-        TissueResolveBulkFlat, TissueResolveBulkHierarchical,
+        TissueResolveBulkFlat, TissueResolveBulkHierarchical, TissueResolveBulkAuto,
     )
     methods: list[BenchmarkMethod] = [
-        TissueResolveBulkHierarchical(),  # recommended/default first
+        TissueResolveBulkAuto(),          # improved: solver=auto (gene-masking CV)
+        TissueResolveBulkHierarchical(),  # resolution-aware broad→fine
         TissueResolveBulkFlat(),
+        # ≥4 executable non-TissueResolve internal baselines (no external deps):
         NNLSBaseline(),
         WeightedNNLSBaseline(),
         MarkerOnlyNNLSBaseline(),
+        RidgeNNLSBaseline(),
+        CorrelationMatcherBaseline(),
     ]
     if include_external:
         from benchmarks.bulk.methods.music_wrapper import MuSiCWrapper

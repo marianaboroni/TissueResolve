@@ -322,6 +322,10 @@ class HierarchicalConfig:
     within_family_spillover_threshold: float = 0.30
     within_family_marker_selection: str = "auto"
     hierarchy_level: str = "both"
+    # partial resolution: assign confident subtype mass and keep only the
+    # ambiguous remainder as unresolved_<family> (not all-or-nothing).
+    allow_partial_resolution: bool = True
+    subtype_confidence_threshold: float = 0.10
 
 
 # ---------------------------------------------------------------------------

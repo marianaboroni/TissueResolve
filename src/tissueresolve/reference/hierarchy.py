@@ -772,6 +772,83 @@ def evaluate_within_family_resolvability(
     )
 
 
+def compute_within_family_subtype_confidence(
+    fine_ref: ReferenceSignature, mapping: dict[str, str],
+    *, min_discriminating_genes: int = 10,
+) -> dict[str, dict[str, Any]]:
+    """Per-subtype confidence *within* its family.
+
+    A subtype is confident when it is well separated from its **closest** family
+    sibling (high ``1 − BC`` and enough discriminating genes).  Returns
+    ``{subtype: {"confidence": float, "min_disc_genes": int, "family": str}}``.
+    Singletons get confidence 1.0 (fine == family).
+    """
+    from tissueresolve.reference.separability import compute_separability
+
+    cell_types = [str(c) for c in fine_ref.cell_types]
+    fam_members: dict[str, list[str]] = {}
+    for ct in cell_types:
+        fam_members.setdefault(str(mapping.get(ct, ct)), []).append(ct)
+
+    out: dict[str, dict[str, Any]] = {}
+    for fam, members in fam_members.items():
+        if len(members) == 1:
+            out[members[0]] = {"confidence": 1.0, "min_disc_genes": -1, "family": fam}
+            continue
+        idx = [cell_types.index(m) for m in members]
+        sub_ref = ReferenceSignature(
+            gene_names=list(fine_ref.gene_names), cell_types=members,
+            R_cpm=(fine_ref.as_R_cpm()[idx]).astype(np.float32),
+            R_log=(fine_ref.as_R_log()[idx]).astype(np.float32),
+            phi=(fine_ref.as_phi()[:, idx]) if fine_ref.phi is not None else None,
+            phi_g=fine_ref.phi_g, genome=fine_ref.genome,
+            n_cells_per_type={m: fine_ref.n_cells_per_type.get(m, 0) for m in members})
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            sep = compute_separability(sub_ref, warn_threshold=2.0,
+                                       raise_on_critical=False)
+        # closest-sibling separability + discriminating genes per subtype
+        best_sep = {m: 1.0 for m in members}
+        best_disc = {m: 10 ** 9 for m in members}
+        for p in sep.pairs:
+            s = 1.0 - p.bhattacharyya_coeff
+            for a in (p.type_a, p.type_b):
+                if s < best_sep[a]:
+                    best_sep[a] = s
+                if p.n_discriminating_genes < best_disc[a]:
+                    best_disc[a] = p.n_discriminating_genes
+        for m in members:
+            disc = 0 if best_disc[m] == 10 ** 9 else int(best_disc[m])
+            conf = float(best_sep[m]) if disc >= min_discriminating_genes else \
+                float(best_sep[m]) * 0.5
+            out[m] = {"confidence": round(conf, 4), "min_disc_genes": disc,
+                      "family": fam}
+    return out
+
+
+def estimate_partial_subtype_resolution(
+    family: str, members: list[str], family_mass: pd.Series,
+    conditional: pd.DataFrame, confidence: dict[str, dict],
+    *, subtype_confidence_threshold: float = 0.10,
+) -> tuple[pd.DataFrame, pd.Series]:
+    """Split a family into confident subtype mass + an unresolved residual.
+
+    Confident subtypes (confidence ≥ threshold) receive
+    ``family_mass × P(subtype | family)``; the remaining (uncertain) conditional
+    share becomes the family's unresolved residual.  Mass is preserved:
+    ``confident subtype mass + residual = family_mass``.
+    """
+    confident = [m for m in members
+                 if confidence.get(m, {}).get("confidence", 0.0)
+                 >= subtype_confidence_threshold]
+    sub = pd.DataFrame(0.0, index=family_mass.index, columns=members)
+    for m in confident:
+        sub[m] = family_mass * conditional[m]
+    residual = family_mass * (1.0 - conditional[confident].sum(axis=1)) \
+        if confident else family_mass.copy()
+    return sub, residual
+
+
 def decide_unresolved_families(
     resolvability: pd.DataFrame, *, allow_unresolved: bool = True,
 ) -> list[str]:
@@ -820,6 +897,8 @@ def assemble_hierarchical_estimates(
     unresolved_threshold: float = 0.10,
     min_discriminating_genes: int = 10,
     within_family_spillover_threshold: float = 0.30,
+    allow_partial_resolution: bool = True,
+    subtype_confidence_threshold: float = 0.10,
     extra_metadata: Optional[dict] = None,
 ) -> HierarchicalEstimates:
     """Combine broad + fine estimates into the final hierarchical result.
@@ -843,15 +922,41 @@ def assemble_hierarchical_estimates(
         min_discriminating_genes=min_discriminating_genes,
         within_family_spillover_threshold=within_family_spillover_threshold,
     )
-    unresolved_families = decide_unresolved_families(
-        resolvability, allow_unresolved=allow_unresolved)
-
     conditional = compute_conditional_subtype_proportions(
         fine_props, family_props, mapping)
-    absolute = combine_family_and_conditional_estimates(
-        family_props, conditional, mapping)
-    resolved_fine, unresolved_mass = add_unresolved_family_mass(
-        absolute, family_props, mapping, unresolved_families)
+    subtypes = [str(c) for c in fine_props.columns]
+    group_of = {st: mapping.get(st, st) for st in subtypes}
+
+    if allow_partial_resolution and allow_unresolved:
+        # Per-subtype: keep confident subtype mass, residual → unresolved_<family>.
+        confidence = compute_within_family_subtype_confidence(
+            fine_ref, mapping, min_discriminating_genes=min_discriminating_genes)
+        resolved_fine = pd.DataFrame(0.0, index=family_props.index, columns=subtypes)
+        residuals = {}
+        for fam in family_props.columns:
+            members = [st for st in subtypes if group_of[st] == fam]
+            if not members:
+                continue
+            sub, residual = estimate_partial_subtype_resolution(
+                fam, members, family_props[fam], conditional, confidence,
+                subtype_confidence_threshold=subtype_confidence_threshold)
+            for m in members:
+                resolved_fine[m] = sub[m]
+            if float(residual.abs().mean()) > 1e-9:
+                residuals[f"unresolved_{fam}"] = residual
+        unresolved_mass = (pd.DataFrame(residuals)
+                           if residuals else
+                           pd.DataFrame(index=family_props.index))
+        unresolved_families = sorted(c[len("unresolved_"):] for c in unresolved_mass.columns)
+        subtype_confidence = confidence
+    else:
+        unresolved_families = decide_unresolved_families(
+            resolvability, allow_unresolved=allow_unresolved)
+        absolute = combine_family_and_conditional_estimates(
+            family_props, conditional, mapping)
+        resolved_fine, unresolved_mass = add_unresolved_family_mass(
+            absolute, family_props, mapping, unresolved_families)
+        subtype_confidence = {}
 
     combined = pd.concat([resolved_fine, unresolved_mass], axis=1)
 
@@ -871,9 +976,15 @@ def assemble_hierarchical_estimates(
         "n_unresolved_families": len(unresolved_families),
         "unresolved_families": list(unresolved_families),
         "allow_unresolved": bool(allow_unresolved),
+        "allow_partial_resolution": bool(allow_partial_resolution and allow_unresolved),
+        "subtype_confidence_threshold": subtype_confidence_threshold,
         "unresolved_threshold": unresolved_threshold,
         "min_discriminating_genes": min_discriminating_genes,
         "within_family_spillover_threshold": within_family_spillover_threshold,
+        "n_confident_subtypes": int(
+            sum(1 for v in subtype_confidence.values()
+                if v.get("confidence", 0) >= subtype_confidence_threshold))
+        if subtype_confidence else None,
     }
     if extra_metadata:
         meta.update(extra_metadata)

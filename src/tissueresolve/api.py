@@ -30,9 +30,50 @@ __all__ = [
 ]
 
 
+def _solver_bulk_result(bulk, ref, solver: str, cfg):
+    """Run a chosen solver backbone (``nnls``/``ridge_nnls``/``auto``/…) and wrap
+    the flat estimate in a ``BulkPipelineResult``-compatible object.
+
+    This is the ``--solver`` path; it is additive and only used when a solver is
+    explicitly requested.  The default ``deconv_bulk`` path (protocol-aware
+    weighted pipeline) is unchanged."""
+    import numpy as np
+    from tissueresolve.solver import get_solver
+    from tissueresolve.bulk.pipeline import BulkPipelineResult
+    from tissueresolve.results import BulkDeconvResult, QCReport
+
+    res = get_solver(solver, n_splits=2).solve(bulk, ref) if solver in ("auto", "ensemble_nnls") \
+        else get_solver(solver).solve(bulk, ref)
+    props = res.proportions
+    sub = ref.subset_genes(res.genes_used)
+    R = sub.as_R_cpm()                       # K × g
+    cols = [c for c in props.columns if c in set(sub.cell_types)]
+    idx = [list(sub.cell_types).index(c) for c in cols]
+    recon = props[cols].to_numpy(float) @ R[idx]   # samples × g
+    bsub = bulk.copy(); bsub.index = bsub.index.map(str)
+    obs = bsub.loc[list(sub.gene_names)].to_numpy(float).T  # samples × g
+    r2 = []
+    for i in range(obs.shape[0]):
+        o, p = obs[i], recon[i]
+        ss_res = float(np.sum((o - p) ** 2)); ss_tot = float(np.sum((o - o.mean()) ** 2))
+        r2.append(1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan"))
+    import pandas as pd
+    deconv = BulkDeconvResult(
+        proportions=props, coverage_r2=pd.Series(r2, index=props.index),
+        gene_panel=list(res.genes_used),
+        run_metadata={"solver": solver, **res.diagnostics, "resolution_mode": "flat"})
+    qc = QCReport(modality="bulk",
+                  recommendations=[f"solver={solver}: "
+                                   f"{res.diagnostics.get('selection_reason', '')}".strip()])
+    return BulkPipelineResult(deconv=deconv, qc=qc, gene_selection=None,
+                              protocol_risk=None,
+                              run_metadata={"solver": solver, **res.diagnostics})
+
+
 def deconv_bulk(
     bulk, ref, *, config=None, resolution_mode: Optional[str] = None,
-    hierarchy_mapping: Optional[dict] = None, **kwargs,
+    hierarchy_mapping: Optional[dict] = None, solver: Optional[str] = None,
+    **kwargs,
 ):
     """Run the bulk deconvolution pipeline.  Returns ``BulkPipelineResult``.
 
@@ -60,6 +101,10 @@ def deconv_bulk(
     import warnings as _warnings
 
     cfg = config or TissueResolveConfig()
+    # Explicit solver backbone (additive): only when requested.  Hierarchical +
+    # solver combination is not yet wired, so a solver implies a flat estimate.
+    if solver is not None and resolution_mode in (None, "flat", "none", "auto"):
+        return _solver_bulk_result(bulk, ref, solver, cfg)
     if hasattr(cfg, "resolution") and resolution_mode is None:
         resolution_mode = getattr(cfg.resolution, "resolution_mode", None)
     resolution_mode = resolution_mode or "auto"
@@ -103,6 +148,8 @@ def deconv_bulk(
         min_discriminating_genes=getattr(hcfg, "min_discriminating_genes", 10),
         within_family_spillover_threshold=getattr(
             hcfg, "within_family_spillover_threshold", 0.30),
+        allow_partial_resolution=getattr(hcfg, "allow_partial_resolution", True),
+        subtype_confidence_threshold=getattr(hcfg, "subtype_confidence_threshold", 0.10),
     )
     return run_hierarchical_bulk(bulk, ref, mapping, config=cfg, **gate, **kwargs)
 
@@ -181,6 +228,8 @@ def deconv_spatial(
         min_discriminating_genes=getattr(hcfg, "min_discriminating_genes", 10),
         within_family_spillover_threshold=getattr(
             hcfg, "within_family_spillover_threshold", 0.30),
+        allow_partial_resolution=getattr(hcfg, "allow_partial_resolution", True),
+        subtype_confidence_threshold=getattr(hcfg, "subtype_confidence_threshold", 0.10),
     )
     return run_hierarchical_spatial(
         Y, ref, array_row, array_col, lib_sizes, gene_names, mapping,

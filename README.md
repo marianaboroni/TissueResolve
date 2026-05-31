@@ -242,11 +242,25 @@ bulk validation, spatial validation, and report generation.
 ## Benchmarking
 
 An optional, offline-first benchmark harness lives in `benchmarks/`. It compares
-TissueResolve (flat + hierarchical) against internal baselines and, when
-installed, external bulk tools (MuSiC, Bisque, DWLS, CIBERSORTx-export) and
-spatial tools (RCTD, cell2location, stereoscope, SPOTlight, Tangram). Missing
-external tools are skipped gracefully with an install hint; one missing tool
-never fails the run.
+TissueResolve (flat + hierarchical) against **five executable internal
+baselines** (NNLS, weighted NNLS, marker-only NNLS, ridge NNLS, correlation
+matcher — these are internal baselines, *not* published external tools).
+
+**External tools require installation or imported results.** External methods
+(bulk: MuSiC, BisqueRNA, DWLS, SCDC, CIBERSORTx, BayesPrism; spatial: RCTD,
+cell2location, stereoscope, SPOTlight, Tangram, CARD, DestVI) are included in
+the comparison **only** when they are installed locally or when you provide
+their predictions via `benchmarks/import_external_results.py`. Tools that are
+merely *exported* (inputs written for manual/web execution) are clearly labelled
+and are **not** counted as executed benchmarks. Missing external tools are
+skipped gracefully with an install hint; one missing tool never fails the run.
+
+```bash
+# run an external tool yourself, then import its predictions for a fair comparison
+python benchmarks/import_external_results.py --method RCTD --modality spatial \
+    --predictions rctd_predictions.tsv
+python benchmarks/run_all.py --use-existing-real-data --include-imported
+```
 
 ```bash
 # plan only (which methods run / are skipped)

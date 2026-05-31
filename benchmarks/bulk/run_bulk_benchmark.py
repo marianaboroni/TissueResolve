@@ -129,6 +129,23 @@ def main(argv=None) -> int:
     compat = build_compatibility_table(methods, scenario)
     write_tsv(compat, OUT / "method_compatibility.tsv")
 
+    # reference suitability score (read-only diagnostic)
+    suitability = None
+    try:
+        import warnings as _w
+        from tissueresolve.reference.suitability import (
+            compute_reference_suitability_score, save_reference_suitability)
+        with _w.catch_warnings():
+            _w.simplefilter("ignore")
+            suitability = compute_reference_suitability_score(
+                scenario["reference"], query_genes=list(scenario["bulk"].index),
+                mapping=scenario.get("hierarchy_mapping"))
+            save_reference_suitability(suitability, OUT)
+        print(f"Reference suitability: {suitability.classification} "
+              f"(score={suitability.overall_score})")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  (suitability skipped: {exc})")
+
     results = []
     fine_by_method, fair_by_method, family_rows, unresolved_rows = {}, {}, [], []
     preds = {}
@@ -155,14 +172,22 @@ def main(argv=None) -> int:
     cats = AN.categorize(results)
     exec_table = AN.build_executive_table(results, methods, scenario,
                                           fair_by_method, fine_by_method)
+    status_table = AN.build_status_table(results, methods)
     cap = AN.capability_matrix(methods)
     best = AN.best_methods(exec_table)
+    best_summary = AN.best_method_summary(exec_table, fair_by_method=fair_by_method,
+                                          modality="bulk")
+    rankings = AN.hierarchical_rankings(exec_table, fair_by_method)
+    interp = AN.interpretation_paragraph("bulk", best, True)
     rec = AN.recommendation_by_use_case(exec_table, best)
     n_nontr = sum(1 for r in cats["executed"] if not r.method.startswith("TissueResolve"))
     conclusion = AN.conclusion_text("bulk", exec_table, best, True, n_nontr)
 
     # tables
     write_tsv(exec_table, OUT / "executive_summary.tsv")
+    write_tsv(status_table, OUT / "method_status.tsv")
+    write_tsv(best_summary, OUT / "best_method_summary.tsv")
+    write_tsv(rankings, OUT / "hierarchical_rankings.tsv")
     write_tsv(cap, OUT / "capability_matrix.tsv")
     if family_rows:
         write_tsv(pd.DataFrame(family_rows).set_index("method"),
@@ -203,8 +228,18 @@ def main(argv=None) -> int:
                       title="Method capability matrix",
                       path=figdir / "capability_matrix.html")
 
-    sections = _bulk_sections(cats, exec_table, cap, compat, best, rec, conclusion,
+    sections = _bulk_sections(cats, exec_table, status_table, best_summary,
+                              rankings, interp, cap, compat, best, rec, conclusion,
                               fair_by_method, scenario)
+    if suitability is not None:
+        from tissueresolve.reference.suitability import summarize_reference_suitability
+        import re as _re
+        md = summarize_reference_suitability(suitability)
+        # crude md→html for the table (report builder renders raw html strings)
+        sections["0. Reference suitability"] = (
+            f"<p><b>{suitability.classification}</b> "
+            f"(score={suitability.overall_score})</p>"
+            + suitability.components_frame().to_html(border=0))
     report_path = R.build_modality_report("bulk", sections, OUT / "bulk_benchmark_report.html")
     print(f"Best fine-level: {best.get('best_bulk_fine_pearson')}; "
           f"best family-level: {best.get('best_bulk_family_pearson')}; "
@@ -223,25 +258,26 @@ def _status_summary_html(cats: dict) -> str:
             f"<li><b>Failed:</b> {names('failed')}</li></ul>")
 
 
-def _bulk_sections(cats, exec_table, cap, compat, best, rec, conclusion,
-                   fair_by_method, scenario):
-    best_html = "<ul>" + "".join(
-        f"<li>{k.replace('_', ' ')}: <b>{v}</b></li>" for k, v in best.items()) + "</ul>"
+def _bulk_sections(cats, exec_table, status_table, best_summary, rankings, interp,
+                   cap, compat, best, rec, conclusion, fair_by_method, scenario):
     rec_html = "<ul>" + "".join(
         f"<li>{k.replace('_', ' ')}: <b>{v}</b></li>" for k, v in rec.items()) + "</ul>"
     fair_df = (pd.DataFrame([{"method": k, **v} for k, v in fair_by_method.items()]
                             ).set_index("method") if fair_by_method else pd.DataFrame())
     return {
-        "1. Executive summary": exec_table,
-        "2. Which methods were compared?": _status_summary_html(cats),
-        "3. Executed vs skipped/exported": _status_summary_html(cats),
-        "4. Best method by criterion": best_html,
-        "5. Recommended method by use case": rec_html,
-        "6. Fair hierarchical / family-level / unresolved-aware metrics": fair_df
+        "1. Best-method summary": best_summary,
+        "2. Interpretation": f"<p>{interp}</p>",
+        "3. Method status (executed / imported / exported-only / skipped)": status_table,
+        "4. Which methods were compared?": _status_summary_html(cats),
+        "5. Executive summary (per-method metrics)": exec_table,
+        "6. Recommended method by use case": rec_html,
+        "7. Hierarchical multi-criterion rankings": rankings
+        if not rankings.empty else "<p>No executed methods to rank.</p>",
+        "8. Fair hierarchical / family-level / unresolved-aware metrics": fair_df
         if not fair_df.empty else "<p>No hierarchical method executed.</p>",
-        "7. Method capability matrix": cap,
-        "8. Method compatibility": compat,
-        "9. Benchmark conclusion": f"<p>{conclusion}</p>",
+        "9. Method capability matrix": cap,
+        "10. Method compatibility": compat,
+        "11. Benchmark conclusion": f"<p>{conclusion}</p>",
     }
 
 
