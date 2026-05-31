@@ -417,6 +417,39 @@ def _spatial_coords(props):
     return None
 
 
+def _hierarchical_report_html() -> str:
+    """Return an HTML block summarising hierarchical outputs, if present."""
+    from tissueresolve.report import templates as T
+
+    hdir = H.OUTPUTS_DIR / "hierarchical"
+    if not hdir.exists():
+        return ""
+    blocks = []
+    md = hdir / "hierarchical_summary.md"
+    if md.exists():
+        blocks.append("<pre>" + T.escape(md.read_text()) + "</pre>")
+    qc = hdir / "hierarchical_qc.tsv"
+    if qc.exists():
+        try:
+            df = pd.read_csv(qc, sep="\t", comment="#")
+            blocks.append("<h3>Within-family resolvability</h3>"
+                          + df.to_html(index=False, border=0))
+        except Exception:
+            pass
+    tsvs = sorted(p.name for p in hdir.glob("*.tsv"))
+    if tsvs:
+        blocks.append("<h3>Tables</h3>"
+                      + T.file_list([f"../hierarchical/{n}" for n in tsvs]))
+    blocks.append(T.estimate_box(
+        "Hierarchical mode first estimates broad cell-type families, then fine "
+        "subpopulations within each family.  Families whose subtypes are not "
+        "separable are reported at the broad level as "
+        "<code>unresolved_&lt;family&gt;</code> — subtype splits there are not "
+        "claimed.  Colours are consistent across figures; see "
+        "<code>../hierarchical/cell_type_color_map.tsv</code>."))
+    return "".join(blocks)
+
+
 def generate_combined_report() -> Path:
     from tissueresolve.report import templates as T
 
@@ -429,7 +462,12 @@ def generate_combined_report() -> Path:
     body = T.section(0, "Validation summary", summary or "<p>not available</p>")
     body += T.section(1, "Reports", T.file_list([
         "../bulk/report.html", "../spatial/report.html"]))
-    body += T.section(2, "Estimate types", T.estimate_box(
+    idx = 2
+    hier_html = _hierarchical_report_html()
+    if hier_html:
+        body += T.section(idx, "Broad-to-fine hierarchical deconvolution", hier_html)
+        idx += 1
+    body += T.section(idx, "Estimate types", T.estimate_box(
         "Bulk: mRNA-derived proportions (not cell fractions). "
         "Spatial: spot-level RNA-derived composition (not cell counts)."))
     out = rdir / "report.html"

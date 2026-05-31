@@ -37,11 +37,34 @@ def cli() -> None:
 @click.option("--query", required=True, help="Bulk counts table or Visium .h5ad or folder")
 @click.option("--out", required=True, help="Output directory for analysis bundle")
 @click.option("--mode", type=click.Choice(["auto", "bulk", "spatial"]), default="auto")
+@click.option("--resolution-mode", type=click.Choice(["none", "suggest", "auto", "hierarchical"]), default="suggest")
+@click.option("--broad-cell-type-col", default="auto", show_default=True,
+              help="obs column with broad/compartment labels (hierarchical mode). "
+                   "'auto' detects a known candidate column.")
+@click.option("--fine-cell-type-col", default="auto", show_default=True,
+              help="obs column with fine/subpopulation labels (hierarchical mode). "
+                   "'auto' detects a known candidate column.")
+@click.option("--cell-type-hierarchy", "hierarchy_path", default=None,
+              type=click.Path(exists=True),
+              help="Optional fine→broad mapping TSV (columns: fine_cell_type, broad_cell_type). "
+                   "Use when the reference has only fine labels.")
+@click.option("--allow-unresolved/--no-allow-unresolved", default=True,
+              help="Keep non-separable families at the broad level as unresolved mass.")
 @click.option("--preset", type=click.Choice(["quick", "standard", "publication", "diagnostic"]), default="standard")
 @click.option("--dry-run", is_flag=True, default=False)
-def run_cli(reference: str, query: str, out: str, mode: str, preset: str, dry_run: bool) -> None:
+def run_cli(reference: str, query: str, out: str, mode: str, resolution_mode: str,
+            broad_cell_type_col: str, fine_cell_type_col: str,
+            hierarchy_path: str | None, allow_unresolved: bool,
+            preset: str, dry_run: bool) -> None:
     """User-friendly top-level run: auto-detect inputs, write analysis plan, optionally run pipelines."""
-    rc = _run_top_level(reference, query, out, mode, preset, dry_run=dry_run)
+    rc = _run_top_level(
+        reference, query, out, mode, preset, resolution_mode,
+        broad_cell_type_col=broad_cell_type_col,
+        fine_cell_type_col=fine_cell_type_col,
+        hierarchy_path=hierarchy_path,
+        allow_unresolved=allow_unresolved,
+        dry_run=dry_run,
+    )
     if rc != 0:
         raise click.ClickException(f"tissueresolve run failed with code {rc}")
 
@@ -52,6 +75,12 @@ def _run_top_level(
     out: str,
     mode: str,
     preset: str,
+    resolution_mode: str,
+    *,
+    broad_cell_type_col: str = "auto",
+    fine_cell_type_col: str = "auto",
+    hierarchy_path: str | None = None,
+    allow_unresolved: bool = True,
     dry_run: bool = False,
 ) -> int:
     outp = Path(out)
@@ -86,10 +115,18 @@ def _run_top_level(
         "detected_reference": detected_ref,
         "detected_query": detected_query,
         "mode": resolved_mode,
+        "resolution_mode": resolution_mode,
         "preset": preset,
         "preset_params": preset_params,
         "protocol": proto,
     }
+    if resolution_mode == "hierarchical":
+        plan["hierarchical"] = {
+            "broad_cell_type_col": broad_cell_type_col,
+            "fine_cell_type_col": fine_cell_type_col,
+            "cell_type_hierarchy": hierarchy_path,
+            "allow_unresolved": allow_unresolved,
+        }
     (outp / "analysis_plan.json").write_text(json.dumps(plan, indent=2))
 
     if dry_run:
@@ -106,10 +143,18 @@ def _run_top_level(
         return 0
 
     cfg = _configure_from_preset(preset_params)
+    if resolution_mode == "hierarchical":
+        cfg.hierarchical.broad_cell_type_col = broad_cell_type_col
+        cfg.hierarchical.fine_cell_type_col = fine_cell_type_col
+        cfg.hierarchical.allow_unresolved = allow_unresolved
     if resolved_mode == "bulk":
-        result = _execute_bulk(reference, query, outp, cfg)
+        result = _execute_bulk(
+            reference, query, outp, cfg, resolution_mode=resolution_mode,
+            hierarchy_path=hierarchy_path)
     else:
-        result = _execute_spatial(reference, query, outp, cfg)
+        result = _execute_spatial(
+            reference, query, outp, cfg, resolution_mode=resolution_mode,
+            hierarchy_path=hierarchy_path)
 
     run_metadata = {
         "tissueresolve_version": __version__,
@@ -121,6 +166,7 @@ def _run_top_level(
     _print_summary_table(
         [
             ("mode", resolved_mode),
+            ("resolution_mode", resolution_mode),
             ("preset", preset),
             ("reference type", detected_ref),
             ("query type", detected_query),
@@ -140,7 +186,72 @@ def _configure_from_preset(preset_params: dict[str, Any]):
     cfg = TissueResolveConfig()
     if preset_params.get("bootstrap"):
         cfg.bootstrap.n_bootstrap = preset_params.get("n_bootstrap", cfg.bootstrap.n_bootstrap)
+    hp = preset_params.get("hierarchical") or {}
+    for k, v in hp.items():
+        if hasattr(cfg.hierarchical, k):
+            setattr(cfg.hierarchical, k, v)
     return cfg
+
+
+def _resolve_hierarchy_mapping(reference_path: str, ref, cfg, hierarchy_path):
+    """Resolve a fine→broad mapping for hierarchical mode (or fail clearly).
+
+    Resolution order:
+
+    1. ``--cell-type-hierarchy`` mapping file (if provided);
+    2. broad/fine annotation columns in the reference ``.h5ad`` ``obs``;
+    3. otherwise raise an actionable error.
+
+    Returns ``(mapping, source_str)``.
+    """
+    from tissueresolve.reference.hierarchy import (
+        build_cell_type_hierarchy, load_hierarchy_mapping,
+    )
+
+    cell_types = list(ref.cell_types)
+
+    if hierarchy_path:
+        raw = load_hierarchy_mapping(hierarchy_path)
+        mapping = build_cell_type_hierarchy(cell_types, raw)
+        return mapping, f"mapping file: {hierarchy_path}"
+
+    # try broad/fine columns from the source h5ad
+    path = Path(reference_path)
+    if path.suffix in {".h5ad", ".h5"}:
+        try:
+            import anndata as ad
+            from tissueresolve.io import validation as v
+
+            adata = ad.read_h5ad(reference_path, backed="r")
+            obs = adata.obs
+            hcfg = cfg.hierarchical
+            broad_col = (v.detect_broad_cell_type_col(obs)
+                         if hcfg.broad_cell_type_col in (None, "auto")
+                         else hcfg.broad_cell_type_col)
+            fine_col = (v.detect_fine_cell_type_col(obs, exclude=broad_col)
+                        if hcfg.fine_cell_type_col in (None, "auto")
+                        else hcfg.fine_cell_type_col)
+            if broad_col and fine_col:
+                info = v.validate_hierarchical_annotations(
+                    obs.copy(), broad_col, fine_col)
+                click.echo(
+                    f"Detected hierarchical annotations: broad={broad_col!r}, "
+                    f"fine={fine_col!r} ({info['n_broad']} families, "
+                    f"{info['n_fine']} fine types).")
+                mapping = build_cell_type_hierarchy(cell_types, info["mapping"])
+                return mapping, f"obs columns: broad={broad_col}, fine={fine_col}"
+        except (KeyError, ValueError):
+            raise
+        except Exception:
+            pass
+
+    raise click.ClickException(
+        "Hierarchical deconvolution requires broad and fine cell-type "
+        "annotations.  Add two columns to adata.obs (and set "
+        "--broad-cell-type-col / --fine-cell-type-col) or provide "
+        "--cell-type-hierarchy mapping.tsv (columns: fine_cell_type, "
+        "broad_cell_type)."
+    )
 
 
 def _read_counts_table(path: Path):
@@ -168,10 +279,9 @@ def _load_reference_signature(path: Path, cfg, estimate_overdispersion: bool = F
     )
 
 
-def _execute_bulk(reference: str, query: str, outp: Path, cfg):
+def _execute_bulk(reference: str, query: str, outp: Path, cfg, resolution_mode: str,
+                  *, hierarchy_path: str | None = None):
     from tissueresolve.api import deconv_bulk
-    import pandas as pd
-    from tissueresolve.io.reference import load_reference_h5ad
 
     ref_path = Path(reference)
     if ref_path.is_dir() and (ref_path / "metadata.json").exists():
@@ -180,15 +290,32 @@ def _execute_bulk(reference: str, query: str, outp: Path, cfg):
     else:
         ref = _load_reference_signature(ref_path, cfg, estimate_overdispersion=False)
 
+    hierarchy_mapping = None
+    if resolution_mode == "hierarchical":
+        hierarchy_mapping, source = _resolve_hierarchy_mapping(
+            reference, ref, cfg, hierarchy_path)
+        click.echo(f"Hierarchy source: {source}")
+
     bulk = _read_counts_table(Path(query))
-    result = deconv_bulk(bulk, ref, config=cfg, n_bootstrap=cfg.bootstrap.n_bootstrap)
+    result = deconv_bulk(
+        bulk,
+        ref,
+        config=cfg,
+        resolution_mode=resolution_mode,
+        hierarchy_mapping=hierarchy_mapping,
+        n_bootstrap=cfg.bootstrap.n_bootstrap,
+    )
 
     result.deconv.save(outp / "deconv")
     result.qc.save(outp / "qc")
+    if resolution_mode == "hierarchical":
+        from tissueresolve.bulk.hierarchical import save_hierarchical_bulk_outputs
+        save_hierarchical_bulk_outputs(result, outp / "hierarchical")
     return result
 
 
-def _execute_spatial(reference: str, query: str, outp: Path, cfg):
+def _execute_spatial(reference: str, query: str, outp: Path, cfg, resolution_mode: str,
+                     *, hierarchy_path: str | None = None):
     from tissueresolve.api import deconv_spatial
     from tissueresolve.io.spatial import load_visium
     from tissueresolve.results import ReferenceSignature
@@ -198,6 +325,12 @@ def _execute_spatial(reference: str, query: str, outp: Path, cfg):
         ref = ReferenceSignature.load(ref_path)
     else:
         ref = _load_reference_signature(ref_path, cfg, estimate_overdispersion=True)
+
+    hierarchy_mapping = None
+    if resolution_mode == "hierarchical":
+        hierarchy_mapping, source = _resolve_hierarchy_mapping(
+            reference, ref, cfg, hierarchy_path)
+        click.echo(f"Hierarchy source: {source}")
 
     visium = load_visium(query, min_counts=0, min_genes=0)
     Y = visium.X
@@ -216,11 +349,16 @@ def _execute_spatial(reference: str, query: str, outp: Path, cfg):
         visium_gene_names,
         spot_ids=spot_ids,
         config=cfg,
+        resolution_mode=resolution_mode,
+        hierarchy_mapping=hierarchy_mapping,
         run_neighbourhood=False,
     )
 
     result.deconv.save(outp / "deconv")
     result.qc.save(outp / "qc")
+    if resolution_mode == "hierarchical":
+        from tissueresolve.spatial.hierarchical import save_hierarchical_spatial_outputs
+        save_hierarchical_spatial_outputs(result, outp / "hierarchical")
     return result
 
 
@@ -242,6 +380,14 @@ def run(argv: list | None = None) -> int:
     parser.add_argument("--query", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--mode", choices=("auto", "bulk", "spatial"), default="auto")
+    parser.add_argument("--resolution-mode", choices=("none", "suggest", "auto", "hierarchical"), default="suggest")
+    parser.add_argument("--broad-cell-type-col", default="auto")
+    parser.add_argument("--fine-cell-type-col", default="auto")
+    parser.add_argument("--cell-type-hierarchy", dest="hierarchy_path", default=None)
+    parser.add_argument("--allow-unresolved", dest="allow_unresolved",
+                        action="store_true", default=True)
+    parser.add_argument("--no-allow-unresolved", dest="allow_unresolved",
+                        action="store_false")
     parser.add_argument("--preset", choices=("quick", "standard", "publication", "diagnostic"), default="standard")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args(argv)
@@ -252,6 +398,11 @@ def run(argv: list | None = None) -> int:
         args.out,
         args.mode,
         args.preset,
+        args.resolution_mode,
+        broad_cell_type_col=args.broad_cell_type_col,
+        fine_cell_type_col=args.fine_cell_type_col,
+        hierarchy_path=args.hierarchy_path,
+        allow_unresolved=args.allow_unresolved,
         dry_run=args.dry_run,
     )
 

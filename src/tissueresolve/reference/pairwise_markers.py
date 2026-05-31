@@ -27,6 +27,9 @@ __all__ = [
     "select_pairwise_discriminative_genes",
     "score_pairwise_markers",
     "augment_marker_panel_for_confusable_pairs",
+    "score_genes_for_subtype_resolution",
+    "select_within_family_discriminative_genes",
+    "build_family_specific_gene_panels",
 ]
 
 
@@ -129,3 +132,156 @@ def augment_marker_panel_for_confusable_pairs(
             panel.append(g)
             panel_set.add(g)
     return panel, added
+
+
+# ---------------------------------------------------------------------------
+# Within-family (hierarchical) marker refinement
+# ---------------------------------------------------------------------------
+
+
+def _family_members(mapping: dict[str, str]) -> dict[str, list[str]]:
+    fams: dict[str, list[str]] = {}
+    for fine, broad in mapping.items():
+        fams.setdefault(str(broad), []).append(str(fine))
+    return fams
+
+
+def score_genes_for_subtype_resolution(
+    ref: ReferenceSignature,
+    family: str,
+    family_mapping: dict[str, str],
+    *,
+    candidate_genes: Optional[list[str]] = None,
+) -> pd.DataFrame:
+    """Score genes for resolving the fine subtypes *within* one broad *family*.
+
+    For each ordered pair of family members the discriminative score from
+    :func:`score_pairwise_markers` is computed; the per-gene resolution score is
+    the **maximum** pairwise score across all within-family pairs (a gene that
+    cleanly splits any sibling pair is valuable).  Leakage is measured against
+    *all* other cell types in the reference, so genes that also fire outside the
+    family are penalised — exactly the within-family specificity we want.
+
+    Returns a DataFrame indexed by gene with the best-pair components and a
+    composite ``resolution_score`` (sorted descending).  Returns an empty frame
+    for families with fewer than two members.
+    """
+    members = [m for m in _family_members(family_mapping).get(family, [])
+               if m in ref.cell_types]
+    if len(members) < 2:
+        return pd.DataFrame(
+            columns=["resolution_score", "best_pair", "log2fc", "abs_log2fc",
+                     "donor_stability", "detectability", "leakage"]
+        )
+    best: dict[str, dict] = {}
+    for i in range(len(members)):
+        for j in range(i + 1, len(members)):
+            a, b = members[i], members[j]
+            scored = score_pairwise_markers(ref, a, b, genes=candidate_genes)
+            for gene, row in scored.iterrows():
+                cur = best.get(gene)
+                if cur is None or row["score"] > cur["resolution_score"]:
+                    best[gene] = {
+                        "resolution_score": float(row["score"]),
+                        "best_pair": f"{a} vs {b}",
+                        "log2fc": float(row["log2fc"]),
+                        "abs_log2fc": float(row["abs_log2fc"]),
+                        "donor_stability": float(row["donor_stability"]),
+                        "detectability": float(row["detectability"]),
+                        "leakage": float(row["leakage"]),
+                    }
+    df = pd.DataFrame(best).T
+    if df.empty:
+        return df
+    return df.sort_values("resolution_score", ascending=False)
+
+
+def select_within_family_discriminative_genes(
+    ref: ReferenceSignature,
+    family_mapping: dict[str, str],
+    *,
+    top_n: int = 20,
+    min_log2fc: float = 1.0,
+    candidate_genes: Optional[list[str]] = None,
+) -> dict[str, list[str]]:
+    """Top discriminative genes for each broad family's fine subtypes.
+
+    Returns ``{family: [genes]}`` for every multi-member family.  Genes are
+    ranked by within-family resolution score (see
+    :func:`score_genes_for_subtype_resolution`); only genes with
+    ``|log2FC| ≥ min_log2fc`` on their best pair are kept, falling back to the
+    top-scoring genes if none clear the threshold (never silently empty).
+    """
+    out: dict[str, list[str]] = {}
+    for fam, members in _family_members(family_mapping).items():
+        if len([m for m in members if m in ref.cell_types]) < 2:
+            continue
+        scored = score_genes_for_subtype_resolution(
+            ref, fam, family_mapping, candidate_genes=candidate_genes)
+        if scored.empty:
+            continue
+        eligible = scored[scored["abs_log2fc"] >= min_log2fc]
+        if eligible.empty:
+            eligible = scored
+        out[fam] = eligible.head(top_n).index.tolist()
+    return out
+
+
+def build_family_specific_gene_panels(
+    ref: ReferenceSignature,
+    family_mapping: dict[str, str],
+    *,
+    base_panel: Optional[list[str]] = None,
+    top_n: int = 20,
+    min_log2fc: float = 1.0,
+    candidate_genes: Optional[list[str]] = None,
+) -> tuple[dict[str, list[str]], pd.DataFrame]:
+    """Build a discriminative gene panel for each broad family.
+
+    Each family's panel is the (optional) *base_panel* augmented with the top
+    within-family discriminative genes for that family's subtypes.  Genes are
+    restricted to those present in the reference.
+
+    Returns
+    -------
+    (panels, discriminability)
+        *panels* maps family → ordered gene list (base genes first, then new
+        within-family genes).  *discriminability* is a tidy DataFrame with
+        columns ``family, gene, resolution_score, best_pair, abs_log2fc,
+        leakage`` describing the selected within-family genes (for the
+        ``within_family_discriminability.tsv`` output).
+    """
+    ref_genes = set(str(g) for g in ref.gene_names)
+    base = [g for g in (base_panel or []) if str(g) in ref_genes]
+    per_family = select_within_family_discriminative_genes(
+        ref, family_mapping, top_n=top_n, min_log2fc=min_log2fc,
+        candidate_genes=candidate_genes)
+
+    panels: dict[str, list[str]] = {}
+    disc_rows: list[dict] = []
+    for fam, members in _family_members(family_mapping).items():
+        present = [m for m in members if str(m) in ref_genes or m in ref.cell_types]
+        if len([m for m in members if m in ref.cell_types]) < 2:
+            continue  # singleton family: no within-family discrimination
+        fam_genes = per_family.get(fam, [])
+        panel = list(dict.fromkeys(base + fam_genes))
+        panels[fam] = panel
+        if fam_genes:
+            scored = score_genes_for_subtype_resolution(ref, fam, family_mapping,
+                                                        candidate_genes=candidate_genes)
+            for g in fam_genes:
+                if g in scored.index:
+                    r = scored.loc[g]
+                    disc_rows.append({
+                        "family": fam, "gene": g,
+                        "resolution_score": round(float(r["resolution_score"]), 4),
+                        "best_pair": r["best_pair"],
+                        "abs_log2fc": round(float(r["abs_log2fc"]), 4),
+                        "leakage": round(float(r["leakage"]), 4),
+                    })
+    discriminability = pd.DataFrame(
+        disc_rows,
+        columns=["family", "gene", "resolution_score", "best_pair",
+                 "abs_log2fc", "leakage"],
+    )
+    return panels, discriminability

@@ -30,32 +30,164 @@ __all__ = [
 ]
 
 
-def deconv_bulk(bulk, ref, *, config=None, **kwargs):
+def deconv_bulk(
+    bulk, ref, *, config=None, resolution_mode: Optional[str] = None,
+    hierarchy_mapping: Optional[dict] = None, **kwargs,
+):
     """Run the bulk deconvolution pipeline.  Returns ``BulkPipelineResult``.
 
     Wrapper over :meth:`BulkPipeline.run`; extra keyword arguments
     (``gene_panel``, ``n_bootstrap``, ``protocol_meta``, ``mrna_corrector`` …)
     are forwarded verbatim.
+
+    Parameters
+    ----------
+    resolution_mode:
+        ``"none"`` or ``"suggest"`` for flat results, ``"auto"`` to merge
+        non-separable types before deconvolution, or ``"hierarchical"`` to run
+        broad-family deconvolution first then refine via within-family subtype
+        estimates (returning a
+        :class:`~tissueresolve.bulk.hierarchical.HierarchicalBulkResult`).
+    hierarchy_mapping:
+        For ``"hierarchical"`` mode, an explicit ``{fine_cell_type:
+        broad_family}`` mapping.  When ``None``, families are inferred from the
+        cell-type labels (a warning is emitted) — providing explicit broad/fine
+        annotations or a mapping file is strongly preferred.
     """
+    from tissueresolve.config import TissueResolveConfig
     from tissueresolve.bulk.pipeline import BulkPipeline
 
-    return BulkPipeline(config).run(bulk, ref, **kwargs)
+    cfg = config or TissueResolveConfig()
+    if hasattr(cfg, "resolution") and resolution_mode is None:
+        resolution_mode = getattr(cfg.resolution, "resolution_mode", None)
+    resolution_mode = resolution_mode or "suggest"
+    if resolution_mode not in ("none", "suggest", "auto", "hierarchical"):
+        raise ValueError(
+            "resolution_mode must be one of: none, suggest, auto, hierarchical"
+        )
+
+    if resolution_mode in ("none", "suggest"):
+        result = BulkPipeline(cfg).run(bulk, ref, **kwargs)
+        result.deconv.run_metadata["resolution_mode"] = resolution_mode
+        return result
+
+    if resolution_mode == "auto":
+        from tissueresolve.reference.separability import compute_separability
+        from tissueresolve.reference.resolution import (
+            ResolutionConfig,
+            assign_resolution_families,
+        )
+        from tissueresolve.reference.hierarchy import merge_reference_cell_types
+
+        sep_report = compute_separability(ref, warn_threshold=0.90,
+                                          raise_on_critical=False)
+        cfg_res = ResolutionConfig(resolution_mode=resolution_mode)
+        mapping = assign_resolution_families(sep_report, list(ref.cell_types), cfg_res)
+        merged_ref = merge_reference_cell_types(ref, mapping)
+        result = BulkPipeline(cfg).run(bulk, merged_ref, **kwargs)
+        for md in (result.deconv.run_metadata, result.run_metadata):
+            md["resolution_mode"] = resolution_mode
+            md["resolution_mapping"] = mapping
+            md["merge_stage"] = "pre_deconvolution"
+        return result
+
+    # ---- hierarchical mode ----
+    from tissueresolve.bulk.hierarchical import run_hierarchical_bulk
+    from tissueresolve.reference.hierarchy import build_cell_type_hierarchy
+
+    mapping = build_cell_type_hierarchy(list(ref.cell_types), hierarchy_mapping)
+    hcfg = getattr(cfg, "hierarchical", None)
+    gate = dict(
+        allow_unresolved=getattr(hcfg, "allow_unresolved", True),
+        unresolved_threshold=getattr(hcfg, "unresolved_threshold", 0.10),
+        min_discriminating_genes=getattr(hcfg, "min_discriminating_genes", 10),
+        within_family_spillover_threshold=getattr(
+            hcfg, "within_family_spillover_threshold", 0.30),
+    )
+    return run_hierarchical_bulk(bulk, ref, mapping, config=cfg, **gate, **kwargs)
 
 
 def deconv_spatial(
     Y, ref, array_row, array_col, lib_sizes, gene_names,
-    spot_ids=None, *, config=None, **kwargs,
+    spot_ids=None, *, config=None, resolution_mode: Optional[str] = None,
+    hierarchy_mapping: Optional[dict] = None, **kwargs,
 ):
     """Run the spatial deconvolution pipeline.  Returns ``SpatialPipelineResult``.
 
     Wrapper over :meth:`SpatialPipeline.run`; extra keyword arguments
     (``marker_genes``, ``run_neighbourhood`` …) are forwarded verbatim.
+
+    Parameters
+    ----------
+    resolution_mode:
+        ``"none"`` or ``"suggest"`` for flat results, ``"auto"`` to merge
+        non-separable types before deconvolution, or ``"hierarchical"`` to run
+        broad-family deconvolution first then refine via within-family subtype
+        estimates (returning a
+        :class:`~tissueresolve.spatial.hierarchical.HierarchicalSpatialResult`).
+    hierarchy_mapping:
+        For ``"hierarchical"`` mode, an explicit ``{fine_cell_type:
+        broad_family}`` mapping.  When ``None``, families are inferred from the
+        labels (a warning is emitted).
     """
+    from tissueresolve.config import TissueResolveConfig
     from tissueresolve.spatial.pipeline import SpatialPipeline
 
-    return SpatialPipeline(config).run(
-        Y, ref, array_row, array_col, lib_sizes, gene_names, spot_ids, **kwargs
+    cfg = config or TissueResolveConfig()
+    if hasattr(cfg, "resolution") and resolution_mode is None:
+        resolution_mode = getattr(cfg.resolution, "resolution_mode", None)
+    resolution_mode = resolution_mode or "suggest"
+    if resolution_mode not in ("none", "suggest", "auto", "hierarchical"):
+        raise ValueError(
+            "resolution_mode must be one of: none, suggest, auto, hierarchical"
+        )
+
+    if resolution_mode in ("none", "suggest"):
+        result = SpatialPipeline(cfg).run(
+            Y, ref, array_row, array_col, lib_sizes, gene_names, spot_ids, **kwargs
+        )
+        result.deconv.run_metadata["resolution_mode"] = resolution_mode
+        return result
+
+    if resolution_mode == "auto":
+        from tissueresolve.reference.separability import compute_separability
+        from tissueresolve.reference.resolution import (
+            ResolutionConfig,
+            assign_resolution_families,
+        )
+        from tissueresolve.reference.hierarchy import merge_reference_cell_types
+
+        sep_report = compute_separability(ref, warn_threshold=0.90,
+                                          raise_on_critical=False)
+        cfg_res = ResolutionConfig(resolution_mode=resolution_mode)
+        mapping = assign_resolution_families(sep_report, list(ref.cell_types), cfg_res)
+        merged_ref = merge_reference_cell_types(ref, mapping)
+        result = SpatialPipeline(cfg).run(
+            Y, merged_ref, array_row, array_col, lib_sizes, gene_names,
+            spot_ids, **kwargs
+        )
+        for md in (result.deconv.run_metadata, result.run_metadata):
+            md["resolution_mode"] = resolution_mode
+            md["resolution_mapping"] = mapping
+            md["merge_stage"] = "pre_deconvolution"
+        return result
+
+    # ---- hierarchical mode ----
+    from tissueresolve.spatial.hierarchical import run_hierarchical_spatial
+    from tissueresolve.reference.hierarchy import build_cell_type_hierarchy
+
+    mapping = build_cell_type_hierarchy(list(ref.cell_types), hierarchy_mapping)
+    hcfg = getattr(cfg, "hierarchical", None)
+    gate = dict(
+        allow_unresolved=getattr(hcfg, "allow_unresolved", True),
+        unresolved_threshold=getattr(hcfg, "unresolved_threshold", 0.10),
+        min_discriminating_genes=getattr(hcfg, "min_discriminating_genes", 10),
+        within_family_spillover_threshold=getattr(
+            hcfg, "within_family_spillover_threshold", 0.30),
     )
+    return run_hierarchical_spatial(
+        Y, ref, array_row, array_col, lib_sizes, gene_names, mapping,
+        spot_ids, config=cfg, **gate, **kwargs)
 
 
 def build_reference(

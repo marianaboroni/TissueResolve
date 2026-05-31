@@ -35,6 +35,7 @@ __all__ = [
     "BootstrapConfig",
     "BulkQCConfig",
     "SpatialQCConfig",
+    "HierarchicalConfig",
 ]
 
 
@@ -273,6 +274,56 @@ class SpatialQCConfig:
     morans_i_warn: float = 0.05
 
 
+@dataclass
+class HierarchicalConfig:
+    """Broad-to-fine (hierarchical) deconvolution settings.
+
+    Hierarchical mode first estimates broad cell-type families, then estimates
+    fine subpopulations *within* each family.  Fine subtype splits are only
+    trusted when the subtypes are demonstrably separable within their family;
+    otherwise the family's mass is reported as ``unresolved_<family>`` rather
+    than split into subtypes for which there is no evidence.
+
+    All thresholds below are **heuristic**.
+
+    Attributes
+    ----------
+    broad_cell_type_col:
+        obs column with broad/compartment labels.  ``"auto"`` → detect from a
+        list of known candidates; ``None`` → not provided.
+    fine_cell_type_col:
+        obs column with fine/subpopulation labels.  ``"auto"`` → detect.
+    allow_unresolved:
+        When True (default), families whose subtypes are not separable keep
+        their mass at the broad level (``unresolved_<family>``); when False,
+        fine splits are always produced (and a warning is emitted).
+    unresolved_threshold:
+        A family is treated as unresolved when its mean within-family
+        separability score (``1 − Bhattacharyya``) is **below** this value.
+    min_discriminating_genes:
+        A family is treated as unresolved when any within-family pair has fewer
+        than this many discriminating genes (|log2FC| > 1).
+    within_family_spillover_threshold:
+        A family is treated as unresolved when its mean within-family spillover
+        (max correlation to a family sibling) is **above** this value.
+    within_family_marker_selection:
+        ``"auto"`` (default), ``"all"`` (use the shared panel), or ``"pairwise"``
+        (augment with pairwise within-family discriminative genes).
+    hierarchy_level:
+        ``"fine"``, ``"family"``, or ``"both"`` (default) — which estimates to
+        emphasise in outputs/reports.  All levels are always saved.
+    """
+
+    broad_cell_type_col: str | None = "auto"
+    fine_cell_type_col: str | None = "auto"
+    allow_unresolved: bool = True
+    unresolved_threshold: float = 0.10
+    min_discriminating_genes: int = 10
+    within_family_spillover_threshold: float = 0.30
+    within_family_marker_selection: str = "auto"
+    hierarchy_level: str = "both"
+
+
 # ---------------------------------------------------------------------------
 # Top-level config
 # ---------------------------------------------------------------------------
@@ -295,6 +346,7 @@ class TissueResolveConfig:
     bootstrap: BootstrapConfig = field(default_factory=BootstrapConfig)
     bulk_qc: BulkQCConfig = field(default_factory=BulkQCConfig)
     spatial_qc: SpatialQCConfig = field(default_factory=SpatialQCConfig)
+    hierarchical: HierarchicalConfig = field(default_factory=HierarchicalConfig)
     output_dir: Path = field(default_factory=lambda: Path("tissueresolve_out"))
     verbose: bool = True
 
@@ -342,6 +394,7 @@ class TissueResolveConfig:
             "bootstrap": BootstrapConfig,
             "bulk_qc": BulkQCConfig,
             "spatial_qc": SpatialQCConfig,
+            "hierarchical": HierarchicalConfig,
         }
         kwargs: dict[str, Any] = {}
         for key, sub_cls in sub_map.items():

@@ -154,3 +154,41 @@ augmentation if subtype resolution is required.
 - **Citing/interpreting:** report bulk values as RNA-derived mRNA proportions
   and spatial values as spot-level RNA-derived composition; read poorly
   separable / high-spillover types at the family level (see above).
+
+## Hierarchical (broad → fine) outputs
+
+When run with `--resolution-mode hierarchical`, TissueResolve writes a
+`hierarchical/` directory alongside the standard outputs.
+
+| File | Meaning |
+|---|---|
+| `*_family_proportions.tsv` (a.k.a. `*_broad_proportions.tsv`) | Broad cell-type-family composition. Rows sum to 1. |
+| `*_conditional_fine_proportions.tsv` | Within-family subtype proportions `P(subtype \| family)`; member columns sum to 1 within each family. |
+| `*_hierarchical_fine_proportions.tsv` | Final absolute subtype proportions for **resolved** families only (unresolved families are 0). |
+| `*_hierarchical_combined_proportions.tsv` | Resolved subtypes **plus** `unresolved_<family>` columns; rows sum to 1. |
+| `*_unresolved_family_mass.tsv` | Family mass that was **not** split into subtypes because the subtypes were not separable. |
+| `*_hierarchical_qc.tsv` | Per-family within-family separability, discriminating-gene count, spillover, and the resolve/unresolved decision. |
+| `cell_type_hierarchy.tsv` | The fine → broad mapping used. |
+| `cell_type_color_map.tsv` / `color_map.json` | Reproducible family-aware colour map. |
+
+### How to read it
+
+- A **resolved** subtype value is a subtype-level estimate.
+- An `unresolved_<family>` value is a **family-level** estimate only — the
+  subtypes within that family could not be reliably separated in your data.
+  Do **not** report it as a confident subtype fraction.
+- Total mass is preserved per sample/spot: resolved subtypes + unresolved mass
+  sum to 1.
+- The `hierarchical_qc.tsv` `reason` column states *why* a family was kept
+  unresolved (low mean separability, too few discriminating genes, or high
+  within-family spillover).
+
+### Colour consistency
+
+The same cell type keeps the same colour across every figure in a run. In
+hierarchical mode each broad family is assigned a distinct base colour, and its
+fine subtypes use related shades of that colour; `Other`, `unresolved_*`, and
+low-confidence categories use neutral grey. The mapping is saved to
+`cell_type_color_map.tsv` (columns: `broad_cell_type`, `fine_cell_type`,
+`color_hex`, `display_label`, `palette_source`, `color_role`). Re-running the
+report from the same outputs reproduces identical colours.

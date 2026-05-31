@@ -1,0 +1,33 @@
+fine_cell_type	broad_cell_type
+CD4-positive helper T cell	T/NK
+CD4-positive, alpha-beta T cell	T/NK
+CD8-positive, alpha-beta memory T cell	T/NK
+IgA plasma cell	B/Plasma
+T cell	T/NK
+activated CD4-positive, alpha-beta T cell	T/NK
+adipocyte of breast	Adipocyte
+alternatively activated macrophage	Myeloid
+basal cell	Epithelial
+capillary endothelial cell	Endothelial
+class switched memory B cell	B/Plasma
+classical monocyte	Myeloid
+conventional dendritic cell	Myeloid
+effector memory CD4-positive, alpha-beta T cell	T/NK
+effector memory CD8-positive, alpha-beta T cell	T/NK
+endothelial cell of artery	Endothelial
+endothelial cell of lymphatic vessel	Endothelial
+endothelial cell of vascular tree	Endothelial
+fibroblast	Stromal/Fibroblast
+inflammatory macrophage	Myeloid
+luminal epithelial cell of mammary gland	Epithelial
+lymphocyte	T/NK
+macrophage	Myeloid
+mammary gland epithelial cell	Epithelial
+mature NK T cell	T/NK
+myeloid cell	Myeloid
+natural killer cell	T/NK
+non-classical monocyte	Myeloid
+pericyte	Mural
+regulatory T cell	T/NK
+vascular associated smooth muscle cell	Mural
+vein endothelial cell	Endothelial

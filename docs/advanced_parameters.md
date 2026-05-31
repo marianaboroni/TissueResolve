@@ -75,3 +75,29 @@ tissueresolve report --modality bulk --results-dir results/bulk --out report.htm
 - Do not override `--lambda-spatial` unless you understand spatial smoothing.
 - Keep `--marker-genes` only if you know the marker set is reliable.
 - Use `--dry-run` to inspect `analysis_plan.json` before a full run.
+
+## Hierarchical (broad → fine) parameters
+
+Enable with `--resolution-mode hierarchical`. Configurable via the CLI and the
+`HierarchicalConfig` section of `TissueResolveConfig`:
+
+| Parameter | CLI flag | Default | Meaning |
+|---|---|---|---|
+| `broad_cell_type_col` | `--broad-cell-type-col` | `auto` | obs column with broad/compartment labels (`auto` detects a known candidate). |
+| `fine_cell_type_col` | `--fine-cell-type-col` | `auto` | obs column with fine/subpopulation labels. |
+| (mapping file) | `--cell-type-hierarchy` | — | fine→broad TSV when the reference has only fine labels. |
+| `allow_unresolved` | `--allow-unresolved` / `--no-allow-unresolved` | `True` | Keep non-separable families at the broad level as `unresolved_<family>`. |
+| `unresolved_threshold` | — | `0.10` | A family is unresolved when mean within-family separability (`1 − Bhattacharyya`) is below this. |
+| `min_discriminating_genes` | — | `10` | A family is unresolved when its worst within-family pair has fewer discriminating genes than this. |
+| `within_family_spillover_threshold` | — | `0.30` | A family is unresolved when mean within-family spillover (max correlation to a sibling) exceeds this. |
+| `within_family_marker_selection` | — | `auto` | `auto` / `all` / `pairwise` within-family marker strategy. |
+| `hierarchy_level` | — | `both` | Which level (`fine` / `family` / `both`) to emphasise in outputs. |
+
+A family is split into subtypes only when **all three** gating signals agree it
+is separable (separability, discriminating genes, spillover). This defence in
+depth prevents a single noisy metric from forcing or blocking a split. All
+thresholds are heuristic and recorded in `run_metadata.json`.
+
+Presets adjust the gating strictness: `publication` is stricter
+(`min_discriminating_genes=30`, `within_family_spillover_threshold=0.25`),
+while `quick`/`diagnostic` are more permissive.

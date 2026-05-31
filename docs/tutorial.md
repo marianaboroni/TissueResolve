@@ -231,8 +231,121 @@ python examples/real_breast_cancer/scripts/02_make_pseudobulk.py
 python examples/real_breast_cancer/scripts/03_run_bulk_validation.py
 python examples/real_breast_cancer/scripts/04_run_spatial_validation.py
 python examples/real_breast_cancer/scripts/05_summarize_results.py
+python examples/real_breast_cancer/scripts/09_run_hierarchical_deconvolution.py
 python examples/real_breast_cancer/scripts/07_generate_reports.py
 ```
 
 This harness is designed to keep real-data validation separate from the default
 package workflows.
+
+## 16. Hierarchical (broad → fine) deconvolution
+
+When a reference has many similar fine subtypes (T/NK subsets, macrophage /
+monocyte / DC states, endothelial or epithelial subtypes, pericyte / smooth
+muscle), estimating all of them at once produces many non-separable pairs and
+spillover.  **Hierarchical mode** is a more cautious, BayesPrism-style strategy:
+
+1. estimate **broad cell-type families** first,
+2. estimate **fine subpopulations within each family**,
+3. combine: `fine(subtype) = family(broad) × P(subtype | family)`,
+4. report **unresolved family mass** when a family's subtypes are not separable.
+
+Fine subtype estimates are only trusted when the model has evidence that the
+subtype is distinguishable within its family (sufficient within-family
+separability, enough discriminating genes, and low within-family spillover).
+Otherwise the family's mass stays at the broad level as `unresolved_<family>`.
+
+### Required reference annotations for hierarchical mode
+
+For hierarchical deconvolution, your `.h5ad` reference should contain two
+annotation columns in `adata.obs`:
+
+| Column | Meaning | Example |
+|---|---|---|
+| `broad_cell_type` | major compartment / broad lineage | `T/NK`, `Myeloid`, `Epithelial` |
+| `sub_cell_type` | fine cell type or cell state | `CD8 T cell`, `macrophage`, `luminal epithelial cell` |
+
+Inspect your columns first:
+
+```python
+import anndata as ad
+adata = ad.read_h5ad("reference.h5ad")
+print(adata.obs.columns.tolist())
+print(adata.obs[["broad_cell_type", "sub_cell_type"]].drop_duplicates())
+```
+
+If your reference contains **only** fine labels, provide a mapping file instead:
+
+```text
+fine_cell_type    broad_cell_type
+CD4 T cell        T/NK
+CD8 T cell        T/NK
+macrophage        Myeloid
+monocyte          Myeloid
+luminal epithelial cell    Epithelial
+```
+
+Hierarchical mode never silently infers a hierarchy: if broad/fine columns are
+missing or ambiguous and no mapping file is given, it fails with a clear error
+asking you to set `--broad-cell-type-col` / `--fine-cell-type-col` or provide
+`--cell-type-hierarchy mapping.tsv`.
+
+### Flat vs hierarchical
+
+- **Flat** (`--resolution-mode none`): estimate all fine cell types at once.
+  Best when the fine types are well separated.
+- **Hierarchical** (`--resolution-mode hierarchical`): broad-to-fine with
+  unresolved-mass abstention.  Best when many fine types are similar — it
+  reduces spillover between unrelated compartments and avoids overclaiming
+  subtype fractions.
+
+### Example commands
+
+Bulk, flat:
+
+```bash
+tissueresolve bulk run \
+  --reference reference.h5ad --bulk bulk_counts.tsv \
+  --cell-type-col sub_cell_type --resolution-mode none \
+  --out results/bulk_flat
+```
+
+Bulk, hierarchical:
+
+```bash
+tissueresolve run --mode bulk \
+  --reference reference.h5ad --query bulk_counts.tsv \
+  --broad-cell-type-col broad_cell_type --fine-cell-type-col sub_cell_type \
+  --resolution-mode hierarchical --preset publication \
+  --out results/bulk_hierarchical
+```
+
+Spatial, hierarchical:
+
+```bash
+tissueresolve run --mode spatial \
+  --reference reference.h5ad --query visium.h5ad \
+  --broad-cell-type-col broad_cell_type --fine-cell-type-col sub_cell_type \
+  --resolution-mode hierarchical --preset publication \
+  --out results/spatial_hierarchical
+```
+
+### Interpreting the outputs
+
+- `*_family_proportions.tsv` — broad family composition (rows sum to 1).
+- `*_conditional_fine_proportions.tsv` — `P(subtype | family)` (sums to 1 per
+  family).
+- `*_hierarchical_fine_proportions.tsv` — resolved subtypes (unresolved
+  families are 0 here).
+- `*_unresolved_family_mass.tsv` — mass kept at the family level.
+- `*_hierarchical_qc.tsv` — per-family resolvability and the decision.
+
+Read a **resolved** subtype as a subtype-level estimate, and an
+`unresolved_<family>` column as a family-level estimate only — its subtypes
+could not be separated in your data and should not be reported as confident
+fractions.
+
+Colours are consistent across all figures of a run: each broad family gets a
+distinct base colour and its fine subtypes use related shades.  The mapping is
+saved to `cell_type_color_map.tsv` (and `color_map.json`) so figures are
+reproducible and customisable later.

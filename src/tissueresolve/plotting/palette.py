@@ -13,6 +13,7 @@ reproducible and shared across all panels of a report.
 """
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Optional
@@ -23,12 +24,32 @@ __all__ = [
     "FAMILY_RAMPS",
     "OTHER_COLOR",
     "UNRESOLVED_COLOR",
+    "QUALITATIVE_BASE",
     "infer_cell_type_family",
     "assign_family_palette",
     "shorten_cell_type_label",
     "wrap_label",
     "save_color_map",
+    "build_hierarchical_color_map",
+    "save_hierarchical_color_map",
+    "load_hierarchical_color_map",
 ]
+
+# Deterministic qualitative base palette for families with no known ramp.
+QUALITATIVE_BASE = [
+    "#4e79a7", "#f28e2b", "#59a14f", "#e15759", "#76b7b2",
+    "#edc948", "#b07aa1", "#ff9da7", "#9c755f", "#bab0ac",
+]
+
+# Map canonical broad-family names (as produced by hierarchy.infer_broad_cell_type_family
+# and by explicit annotations) → FAMILY_RAMPS key.
+_FAMILY_TO_RAMP = {
+    "t/nk": "T/NK", "b/plasma": "B/plasma", "myeloid": "myeloid",
+    "endothelial": "endothelial", "epithelial": "epithelial",
+    "stromal/fibroblast": "stromal", "stromal": "stromal",
+    "fibroblast": "stromal", "mural": "mural", "adipocyte": "adipocyte",
+    "other": "other",
+}
 
 OTHER_COLOR = "#d9d9d9"        # light grey
 UNRESOLVED_COLOR = "#636363"   # dark grey (unresolved / family-level)
@@ -168,3 +189,189 @@ def save_color_map(color_map: dict[str, str], out_dir, *,
     path = out_dir / name
     df.to_csv(path, sep="\t", index=False)
     return path
+
+
+# ---------------------------------------------------------------------------
+# Reproducible, family-aware colour map (broad/fine annotation aware)
+# ---------------------------------------------------------------------------
+
+
+def _hex_to_rgb(h: str) -> tuple[int, int, int]:
+    h = h.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))  # type: ignore[return-value]
+
+
+def _rgb_to_hex(rgb) -> str:
+    return "#{:02x}{:02x}{:02x}".format(*(max(0, min(255, int(round(c)))) for c in rgb))
+
+
+def _blend(hex_color: str, frac: float, toward: str = "#ffffff") -> str:
+    """Blend *hex_color* a *frac* of the way toward *toward* (frac∈[0,1])."""
+    a, b = _hex_to_rgb(hex_color), _hex_to_rgb(toward)
+    return _rgb_to_hex(tuple(a[i] + (b[i] - a[i]) * frac for i in range(3)))
+
+
+def _family_shades(base: str, n: int, ramp_key: Optional[str]) -> list[str]:
+    """Return *n* visually-related shades for a family's fine subtypes."""
+    if n <= 0:
+        return []
+    ramp = FAMILY_RAMPS.get(ramp_key or "", [])
+    if len(ramp) >= n:
+        return list(ramp[:n])
+    if n == 1:
+        return [base]
+    # interpolate from the base (dark) toward a light tint
+    return [_blend(base, 0.65 * i / (n - 1)) for i in range(n)]
+
+
+def build_hierarchical_color_map(
+    fine_types: list[str],
+    mapping: Optional[dict[str, str]] = None,
+    *,
+    family_order: Optional[list[str]] = None,
+    existing: Optional[pd.DataFrame] = None,
+) -> pd.DataFrame:
+    """Build a deterministic, family-aware colour map for a run.
+
+    Broad families each get a visually distinct base colour; the fine subtypes
+    within a family use related shades (lighter tints) of that colour.
+    ``Other`` is light grey; ``unresolved_*`` / broad-level labels are dark
+    grey.  When a previous *existing* colour map is supplied, colours already
+    assigned to a cell type are **preserved** (new types get new colours), so
+    figures stay consistent across re-runs.
+
+    Parameters
+    ----------
+    fine_types:
+        Fine cell-type labels appearing in the results (subtype columns).
+    mapping:
+        ``{fine_cell_type: broad_family}``.  When ``None`` or empty, colours
+        are assigned to fine types from the qualitative palette (no
+        family-aware shading) and a note is recorded in ``palette_source``.
+    family_order:
+        Optional explicit broad-family ordering (e.g. by abundance).  Defaults
+        to sorted family names.
+    existing:
+        Optional previously-saved colour-map DataFrame to extend without
+        changing existing colours.
+
+    Returns
+    -------
+    pd.DataFrame
+        Columns: ``broad_cell_type, fine_cell_type, color_hex, display_label,
+        palette_source, color_role``.  One row per broad family
+        (``color_role="broad"``) and one per fine/unresolved/other label.
+    """
+    fine_types = [str(c) for c in fine_types]
+    mapping = {str(k): str(v) for k, v in (mapping or {}).items()}
+    have_families = bool(mapping)
+
+    locked: dict[tuple[str, str], str] = {}
+    if existing is not None and not existing.empty:
+        for _, r in existing.iterrows():
+            locked[(str(r.get("broad_cell_type", "")),
+                    str(r.get("fine_cell_type", "")))] = str(r["color_hex"])
+
+    # group fine types by family (separating special roles)
+    fam_members: dict[str, list[str]] = {}
+    specials: list[tuple[str, str, str]] = []  # (label, role, color)
+    for ct in fine_types:
+        low = ct.strip().lower()
+        if low == "other":
+            specials.append((ct, "other", OTHER_COLOR))
+            continue
+        if low.startswith("unresolved"):
+            specials.append((ct, "unresolved", UNRESOLVED_COLOR))
+            continue
+        fam = mapping.get(ct, ct if not have_families else "Other")
+        fam_members.setdefault(fam, []).append(ct)
+
+    families = family_order or sorted(fam_members)
+    # base colour per family (known ramp first, else qualitative cycle)
+    base_for: dict[str, tuple[str, Optional[str]]] = {}
+    qi = 0
+    for fam in families:
+        ramp_key = _FAMILY_TO_RAMP.get(fam.strip().lower())
+        if ramp_key and ramp_key != "other":
+            base = FAMILY_RAMPS[ramp_key][0]
+        else:
+            base = QUALITATIVE_BASE[qi % len(QUALITATIVE_BASE)]
+            qi += 1
+            ramp_key = None
+        base_for[fam] = (base, ramp_key)
+
+    rows: list[dict] = []
+
+    def _color(broad: str, fine: str, default: str) -> tuple[str, str]:
+        key = (broad, fine)
+        if key in locked:
+            return locked[key], "reused_from_existing"
+        return default, ("family_ramp" if have_families else "qualitative")
+
+    for fam in families:
+        base, ramp_key = base_for[fam]
+        # broad-family row (used for broad-level plots)
+        col, src = _color(fam, "", base if have_families else OTHER_COLOR)
+        if have_families:
+            rows.append({
+                "broad_cell_type": fam, "fine_cell_type": "",
+                "color_hex": col, "display_label": shorten_cell_type_label(fam),
+                "palette_source": src, "color_role": "broad",
+            })
+        members = sorted(fam_members[fam], key=str)
+        shades = _family_shades(base, len(members), ramp_key)
+        for ct, shade in zip(members, shades):
+            col, src = _color(fam, ct, shade)
+            rows.append({
+                "broad_cell_type": fam if have_families else "",
+                "fine_cell_type": ct,
+                "color_hex": col,
+                "display_label": shorten_cell_type_label(ct),
+                "palette_source": src if have_families else "qualitative_no_family",
+                "color_role": "fine",
+            })
+
+    for label, role, default in specials:
+        col, src = _color("", label, default)
+        rows.append({
+            "broad_cell_type": "", "fine_cell_type": label,
+            "color_hex": col, "display_label": shorten_cell_type_label(label),
+            "palette_source": "reused_from_existing" if (("", label) in locked) else "neutral_grey",
+            "color_role": role,
+        })
+
+    return pd.DataFrame(
+        rows,
+        columns=["broad_cell_type", "fine_cell_type", "color_hex",
+                 "display_label", "palette_source", "color_role"],
+    )
+
+
+def save_hierarchical_color_map(
+    color_map: pd.DataFrame, out_dir, *,
+    tsv_name: str = "cell_type_color_map.tsv",
+    json_name: str = "color_map.json",
+) -> dict[str, Path]:
+    """Persist a hierarchical colour map as both TSV and JSON.
+
+    The JSON form is a flat ``{label: color_hex}`` dict (fine labels preferred,
+    falling back to the broad family name) for quick programmatic reuse.
+    """
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    tsv_path = out_dir / tsv_name
+    color_map.to_csv(tsv_path, sep="\t", index=False)
+
+    flat: dict[str, str] = {}
+    for _, r in color_map.iterrows():
+        label = str(r["fine_cell_type"]) or str(r["broad_cell_type"])
+        if label:
+            flat.setdefault(label, str(r["color_hex"]))
+    json_path = out_dir / json_name
+    json_path.write_text(json.dumps(flat, indent=2), encoding="utf-8")
+    return {"tsv": tsv_path, "json": json_path}
+
+
+def load_hierarchical_color_map(path) -> pd.DataFrame:
+    """Load a colour map saved by :func:`save_hierarchical_color_map` (TSV)."""
+    return pd.read_csv(Path(path), sep="\t").fillna("")

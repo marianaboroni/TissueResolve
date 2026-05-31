@@ -136,6 +136,10 @@ def _generate_bulk_report_from_result(
         _df_html(deconv.proportions.round(4))
         + "<h3>Summary</h3>" + _df_html(deconv.summary().round(4)),
     ))
+    hier_html = _hierarchical_html(result, "bulk")
+    if hier_html is not None:
+        parts.append(_section(
+            "Hierarchical resolution-aware deconvolution", hier_html))
     if qc is not None:
         parts.append(_section("QC metrics", _bulk_qc_html(qc)))
     parts.append(_section("Uncertainty", _bulk_uncertainty_html(deconv, qc)))
@@ -239,6 +243,10 @@ def _generate_spatial_report_from_result(
         + ("<p class='caption'>(first 10 spots shown)</p>"
            if deconv.n_spots > 10 else ""),
     ))
+    hier_html = _hierarchical_html(result, "spatial")
+    if hier_html is not None:
+        parts.append(_section(
+            "Hierarchical resolution-aware deconvolution", hier_html))
     if spot_qc is not None:
         parts.append(_section("Spatial QC", _df_html(spot_qc.describe().round(4))))
     if morans is not None:
@@ -255,6 +263,81 @@ def _generate_spatial_report_from_result(
     parts.append(_section("Methods", f"<p>{_html.escape(methods)}</p>".replace("\n\n", "</p><p>")))
 
     return _write(output_path, title, parts)
+
+
+# ---------------------------------------------------------------------------
+# Hierarchical (broad-to-fine) section
+# ---------------------------------------------------------------------------
+
+
+def _hierarchical_html(result: Any, modality: str) -> Optional[str]:
+    """Render the "Hierarchical resolution-aware deconvolution" section.
+
+    Returns ``None`` when *result* is not a hierarchical result (no
+    ``.estimates``), so flat reports are unaffected.
+    """
+    est = getattr(result, "estimates", None)
+    if est is None or not hasattr(est, "family_proportions"):
+        return None
+
+    unit = "spots" if modality == "spatial" else "samples"
+    intro = (
+        "<p>Hierarchical mode first estimates <b>broad cell-type families</b> "
+        "and then estimates <b>fine subpopulations within each family</b>.  "
+        "This reduces spillover between unrelated compartments and yields more "
+        "cautious subtype-level predictions: a family's mass is only split into "
+        "subtypes when those subtypes are demonstrably separable within the "
+        "family.  Families that are not separable are reported at the broad "
+        f"level as <code>unresolved_&lt;family&gt;</code> (averaged over {unit}).</p>"
+    )
+
+    # mean family-level composition
+    fam_mean = est.family_proportions.mean(axis=0).sort_values(ascending=False)
+    fam_html = _df_html(fam_mean.to_frame("mean_proportion").round(4))
+
+    # per-family resolvability + decision
+    qc = est.qc.copy()
+    if "resolvable" in qc.columns:
+        qc["resolvable"] = qc["resolvable"].map(
+            lambda b: '<span class="ok">yes</span>' if bool(b)
+            else '<span class="warn">no</span>')
+    qc_html = _df_html(qc, raw=True)
+
+    # unresolved mass
+    unresolved_html = ""
+    if est.unresolved_mass is not None and est.unresolved_mass.shape[1] > 0:
+        um = est.unresolved_mass.mean(axis=0).to_frame("mean_unresolved_mass").round(4)
+        unresolved_html = (
+            "<h3>Unresolved family mass</h3>"
+            "<p>These families were detected but their subtypes could not be "
+            "reliably separated; interpret them at the family level only.</p>"
+            + _df_html(um)
+        )
+    else:
+        unresolved_html = ("<p><i>All multi-subtype families were resolvable; "
+                           "no unresolved mass was reported.</i></p>")
+
+    # reliable vs family-level interpretation table
+    rows = []
+    for _, r in est.qc.iterrows():
+        fam = r.get("broad_family", "")
+        n = int(r.get("n_subtypes", 0)) if not pd.isna(r.get("n_subtypes", 0)) else 0
+        reliable = bool(r.get("resolvable", False))
+        rows.append({
+            "broad_family": fam,
+            "n_subtypes": n,
+            "interpret_at": "subtype level" if reliable else "family level only",
+        })
+    interp_html = _df_html(pd.DataFrame(rows)) if rows else ""
+
+    body = (
+        intro
+        + "<h3>Broad family composition (mean)</h3>" + fam_html
+        + "<h3>Within-family resolvability</h3>" + qc_html
+        + unresolved_html
+        + "<h3>How to interpret each family</h3>" + interp_html
+    )
+    return body
 
 
 # ---------------------------------------------------------------------------
@@ -341,8 +424,9 @@ def _kv_table(d: dict, *, raw_values: bool = False) -> str:
     return f"<table>{''.join(rows)}</table>"
 
 
-def _df_html(df: pd.DataFrame) -> str:
-    return df.to_html(border=0, na_rep="—")
+def _df_html(df: pd.DataFrame, *, raw: bool = False) -> str:
+    # raw=True renders embedded HTML (e.g. coloured status spans) unescaped.
+    return df.to_html(border=0, na_rep="—", escape=not raw)
 
 
 def _gene_list_html(genes: Sequence[str], limit: int = 50) -> str:
