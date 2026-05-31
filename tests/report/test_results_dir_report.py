@@ -55,6 +55,18 @@ def test_bulk_results_dir_report_sections(tmp_path):
     assert "bulk_composition_clustered_barplot.html" in doc
 
 
+def test_bulk_report_includes_analysis_plan(tmp_path):
+    rdir = _make_bulk_results(tmp_path)
+    out = generate_bulk_report(
+        str(rdir), out=rdir / "report.html",
+        run_metadata={"analysis_plan": {"mode": "bulk", "preset": "standard"}})
+    text = out.read_text()
+    assert out.exists()
+    assert "Analysis plan" in text
+    assert "mode" in text
+    assert "preset" in text
+
+
 def test_bulk_report_dispatch_via_path(tmp_path):
     rdir = _make_bulk_results(tmp_path)
     out = generate_bulk_report(str(rdir), out=rdir / "r.html")

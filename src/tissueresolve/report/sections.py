@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Optional
+import json
 
 import pandas as pd
 
@@ -204,6 +205,8 @@ def bulk_sections(results_dir: Path, *, run_metadata: Optional[dict] = None,
     secs.append(("Warnings and limitations", T.severity_warning_box(warns)))
     secs.append(("Methods", _methods_html(results_dir, "bulk")))
     secs.append(("Detailed outputs", _detailed_outputs(t, props)))
+    if run_metadata and run_metadata.get("analysis_plan") is not None:
+        secs.append(("Analysis plan", _analysis_plan_section(run_metadata)))
     secs.append(("Output files", T.file_list(_output_files(results_dir))))
     return secs
 
@@ -274,6 +277,8 @@ def spatial_sections(results_dir: Path, *, run_metadata: Optional[dict] = None,
     secs.append(("Warnings and limitations", T.severity_warning_box(warns)))
     secs.append(("Methods", _methods_html(results_dir, "spatial")))
     secs.append(("Detailed outputs", _detailed_outputs(t, props)))
+    if run_metadata and run_metadata.get("analysis_plan") is not None:
+        secs.append(("Analysis plan", _analysis_plan_section(run_metadata)))
     secs.append(("Output files", T.file_list(_output_files(results_dir))))
     return secs
 
@@ -332,6 +337,13 @@ def _methods_html(results_dir: Path, modality: str) -> str:
             text = mt.read_text(encoding="utf-8")
             return f"<p>{T.escape(text)}</p>".replace("\n\n", "</p><p>")
     return f"<p>{T.escape(estimate_type_statement(modality))}</p>"
+
+
+def _analysis_plan_section(run_metadata: dict) -> str:
+    plan = run_metadata.get("analysis_plan")
+    if not plan:
+        return "<p>No analysis plan available.</p>"
+    return f"<pre>{T.escape(json.dumps(plan, indent=2))}</pre>"
 
 
 def _output_files(results_dir: Path) -> list[str]:

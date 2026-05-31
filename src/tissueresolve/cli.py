@@ -14,16 +14,266 @@ rather than silently failing.
 from __future__ import annotations
 
 import sys
+from typing import Any
 
 import click
+import json
+from pathlib import Path
 
 from tissueresolve import __version__
+from tissueresolve.io import autodetect
+from tissueresolve.presets import get_preset
+from tissueresolve.protocol import detect as protocol_detect
 
 
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 @click.version_option(__version__, prog_name="tissueresolve")
 def cli() -> None:
     """TissueResolve — unified cell-type deconvolution."""
+
+
+@cli.command(name="run")
+@click.option("--reference", required=True, help="Single-cell reference (.h5ad) or saved reference dir")
+@click.option("--query", required=True, help="Bulk counts table or Visium .h5ad or folder")
+@click.option("--out", required=True, help="Output directory for analysis bundle")
+@click.option("--mode", type=click.Choice(["auto", "bulk", "spatial"]), default="auto")
+@click.option("--preset", type=click.Choice(["quick", "standard", "publication", "diagnostic"]), default="standard")
+@click.option("--dry-run", is_flag=True, default=False)
+def run_cli(reference: str, query: str, out: str, mode: str, preset: str, dry_run: bool) -> None:
+    """User-friendly top-level run: auto-detect inputs, write analysis plan, optionally run pipelines."""
+    rc = _run_top_level(reference, query, out, mode, preset, dry_run=dry_run)
+    if rc != 0:
+        raise click.ClickException(f"tissueresolve run failed with code {rc}")
+
+
+def _run_top_level(
+    reference: str,
+    query: str,
+    out: str,
+    mode: str,
+    preset: str,
+    dry_run: bool = False,
+) -> int:
+    outp = Path(out)
+    outp.mkdir(parents=True, exist_ok=True)
+
+    detected_ref = autodetect.detect_input_type(reference)
+    detected_query = autodetect.detect_input_type(query)
+    preset_params = get_preset(preset)
+
+    proto: dict[str, Any] = {"reference": {}, "query": {}}
+    try:
+        import anndata as ad
+
+        if Path(reference).suffix == ".h5ad":
+            adata = ad.read_h5ad(reference)
+            proto["reference"] = protocol_detect.detect_reference_protocol(adata)
+    except Exception:
+        pass
+
+    resolved_mode = mode
+    if mode == "auto":
+        if detected_query == "bulk_counts_table":
+            resolved_mode = "bulk"
+        elif detected_query in ("spatial_visium_h5ad", "spatial_visium_folder"):
+            resolved_mode = "spatial"
+        else:
+            raise ValueError(
+                "Could not auto-detect query mode; use --mode to specify 'bulk' or 'spatial'."
+            )
+
+    plan = {
+        "detected_reference": detected_ref,
+        "detected_query": detected_query,
+        "mode": resolved_mode,
+        "preset": preset,
+        "preset_params": preset_params,
+        "protocol": proto,
+    }
+    (outp / "analysis_plan.json").write_text(json.dumps(plan, indent=2))
+
+    if dry_run:
+        _print_summary_table(
+            [
+                ("mode", resolved_mode),
+                ("preset", preset),
+                ("reference type", detected_ref),
+                ("query type", detected_query),
+                ("analysis_plan", str(outp / "analysis_plan.json")),
+            ]
+        )
+        print("Dry run: no algorithms executed.")
+        return 0
+
+    cfg = _configure_from_preset(preset_params)
+    if resolved_mode == "bulk":
+        result = _execute_bulk(reference, query, outp, cfg)
+    else:
+        result = _execute_spatial(reference, query, outp, cfg)
+
+    run_metadata = {
+        "tissueresolve_version": __version__,
+        "analysis_plan": plan,
+        "pipeline_run": result.run_metadata,
+    }
+    (outp / "run_metadata.json").write_text(json.dumps(run_metadata, indent=2, default=str))
+
+    _print_summary_table(
+        [
+            ("mode", resolved_mode),
+            ("preset", preset),
+            ("reference type", detected_ref),
+            ("query type", detected_query),
+            ("results_dir", str(outp)),
+            ("n_cell_types", getattr(result.deconv, "n_cell_types", "—")),
+            ("n_samples/spots", getattr(result.deconv, "n_samples", getattr(result.deconv, "n_spots", "—"))),
+            ("analysis_plan", str(outp / "analysis_plan.json")),
+        ]
+    )
+    print(f"Results written to {outp}/")
+    return 0
+
+
+def _configure_from_preset(preset_params: dict[str, Any]):
+    from tissueresolve.config import TissueResolveConfig
+
+    cfg = TissueResolveConfig()
+    if preset_params.get("bootstrap"):
+        cfg.bootstrap.n_bootstrap = preset_params.get("n_bootstrap", cfg.bootstrap.n_bootstrap)
+    return cfg
+
+
+def _read_counts_table(path: Path):
+    import pandas as pd
+
+    if not path.exists():
+        raise FileNotFoundError(f"Bulk counts file not found: {path}")
+    sep = "\t" if path.suffix.lower() == ".tsv" else ","
+    table = pd.read_csv(path, sep=sep, index_col=0)
+    if table.empty:
+        raise ValueError(f"Bulk counts table is empty: {path}")
+    return table
+
+
+def _load_reference_signature(path: Path, cfg, estimate_overdispersion: bool = False):
+    from tissueresolve.api import build_reference
+    from tissueresolve.results import ReferenceSignature
+
+    if path.is_dir() and (path / "metadata.json").exists():
+        return ReferenceSignature.load(path)
+    if path.suffix in {".h5ad", ".h5"}:
+        return build_reference(str(path), config=cfg, cell_type_col="cell_type", estimate_overdispersion=estimate_overdispersion)
+    raise ValueError(
+        f"Cannot interpret reference {path!r}: expected a saved ReferenceSignature directory or an .h5ad file."
+    )
+
+
+def _execute_bulk(reference: str, query: str, outp: Path, cfg):
+    from tissueresolve.api import deconv_bulk
+    import pandas as pd
+    from tissueresolve.io.reference import load_reference_h5ad
+
+    ref_path = Path(reference)
+    if ref_path.is_dir() and (ref_path / "metadata.json").exists():
+        from tissueresolve.results import ReferenceSignature
+        ref = ReferenceSignature.load(ref_path)
+    else:
+        ref = _load_reference_signature(ref_path, cfg, estimate_overdispersion=False)
+
+    bulk = _read_counts_table(Path(query))
+    result = deconv_bulk(bulk, ref, config=cfg, n_bootstrap=cfg.bootstrap.n_bootstrap)
+
+    result.deconv.save(outp / "deconv")
+    result.qc.save(outp / "qc")
+    return result
+
+
+def _execute_spatial(reference: str, query: str, outp: Path, cfg):
+    from tissueresolve.api import deconv_spatial
+    from tissueresolve.io.spatial import load_visium
+    from tissueresolve.results import ReferenceSignature
+
+    ref_path = Path(reference)
+    if ref_path.is_dir() and (ref_path / "metadata.json").exists():
+        ref = ReferenceSignature.load(ref_path)
+    else:
+        ref = _load_reference_signature(ref_path, cfg, estimate_overdispersion=True)
+
+    visium = load_visium(query, min_counts=0, min_genes=0)
+    Y = visium.X
+    array_row = visium.obs["array_row"].to_numpy()
+    array_col = visium.obs["array_col"].to_numpy()
+    lib_sizes = visium.obs["total_counts"].to_numpy().astype("float32")
+    visium_gene_names = list(visium.var_names)
+    spot_ids = list(visium.obs_names)
+
+    result = deconv_spatial(
+        Y,
+        ref,
+        array_row,
+        array_col,
+        lib_sizes,
+        visium_gene_names,
+        spot_ids=spot_ids,
+        config=cfg,
+        run_neighbourhood=False,
+    )
+
+    result.deconv.save(outp / "deconv")
+    result.qc.save(outp / "qc")
+    return result
+
+
+def _print_summary_table(rows: list[tuple[str, Any]]) -> None:
+    width = max(len(k) for k, _ in rows)
+    for k, v in rows:
+        print(f"{k:<{width}}  {v}")
+
+
+def run(argv: list | None = None) -> int:
+    """Programmatic entrypoint used by tests: parse args and write analysis plan.
+
+    Returns 0 on success or raises SystemExit for --help.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(prog="tissueresolve")
+    parser.add_argument("--reference", required=True)
+    parser.add_argument("--query", required=True)
+    parser.add_argument("--out", required=True)
+    parser.add_argument("--mode", choices=("auto", "bulk", "spatial"), default="auto")
+    parser.add_argument("--preset", choices=("quick", "standard", "publication", "diagnostic"), default="standard")
+    parser.add_argument("--dry-run", action="store_true")
+    args = parser.parse_args(argv)
+
+    return _run_top_level(
+        args.reference,
+        args.query,
+        args.out,
+        args.mode,
+        args.preset,
+        dry_run=args.dry_run,
+    )
+
+
+def wizard(argv: list | None = None) -> int:
+    """Interactive wizard to write a simple tissueresolve_config.yaml in cwd.
+
+    Returns 0 on success.
+    """
+    ref = input("Reference path (saved reference dir or .h5ad): ")
+    query = input("Query path (bulk counts table or Visium .h5ad/folder): ")
+    mode = input("Mode (auto/bulk/spatial): ")
+    preset = input("Preset (quick/standard/publication/diagnostic): ")
+    contents = [
+        "# TissueResolve config written by wizard",
+        f"reference: {ref}",
+        f"query: {query}",
+        f"mode: {mode}",
+        f"preset: {preset}",
+    ]
+    Path("tissueresolve_config.yaml").write_text("\n".join(contents))
+    return 0
 
 
 # ---------------------------------------------------------------------------

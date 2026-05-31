@@ -1,194 +1,155 @@
 # TissueResolve
 
-Unified cell-type and cell-state deconvolution for bulk RNA-seq and 10x Visium
+**TissueResolve:** spillover-aware deconvolution for bulk RNA-seq and 10x Visium
 spatial transcriptomics.
 
-TissueResolve integrates two complementary algorithms:
+TissueResolve estimates RNA-derived cell-type and cell-state composition using a
+shared single-cell reference layer for both bulk and spatial workflows.
+It combines protocol-aware gene selection, robust QC, separability diagnostics,
+spillover-aware interpretation, and publication-ready HTML reports.
 
-- **Bulk deconvolution** — protocol-aware weighted NNLS with bootstrap CIs,
-  derived from CHIMERA.
-- **Spatial deconvolution** — negative-binomial CAR model for 10x Visium,
-  derived from SpatCAR.
+## What TissueResolve does
 
-Both workflows share a common reference construction pipeline, gene selection
-framework, separability diagnostics, QC system, and reporting layer.
+- Estimates RNA-derived composition from bulk RNA-seq and 10x Visium data.
+- Builds a reference from single-cell `.h5ad` files or saved reference
+  directories.
+- Supports bulk deconvolution with protocol-aware weighting, bootstrap
+  uncertainty, and compatibility checks.
+- Supports spatial deconvolution on Visium data using a graph-aware NB-CAR
+  model.
+- Reports gene overlap, separability, spillover, warnings, and methods text.
+- Generates publication-style reports with figures and source data.
 
-## Important: what the outputs represent
+## Main differentiators
 
-**Bulk** — `BulkDeconvResult.proportions` contains **mRNA proportions**, not
-cell fractions.  In tissues where cell types differ substantially in mRNA
-content per cell (plasma cells, neurons, hepatocytes), these quantities differ.
-Use `bulk.solver.MRNAContentCorrector` to convert if mRNA content data are
-available.
-
-**Spatial** — `SpatialDeconvResult.proportions` contains **spot-level
-RNA-derived cellular composition estimates**, not direct single-cell counts
-unless explicitly calibrated.
-
-## Status
-
-Stages 0–5 are implemented: shared reference layer, protocol layer, the full
-bulk workflow (wNNLS + bootstrap + QC + CLI), the full spatial workflow
-(NB-CAR model + graph + QC + neighbourhood + benchmark + CLI), and the
-unification layer (plotting, HTML reports, methods text, docs, compliance
-tests). Real-data validation is a **separate, offline-by-default** harness and
-is not part of the default test suite.
+- Unified bulk + spatial workflow with the same reference abstraction.
+- Protocol-aware reference and query compatibility checks.
+- Explicit bulk mRNA-proportion output warnings.
+- Spatial graph-aware Visium modeling and neighborhood statistics.
+- Family-aware handling of non-separable cell types.
+- Plotly HTML reports with saved figure source data.
+- Real-data breast cancer validation harness kept separate from the default
+  offline test suite.
 
 ## Installation
 
 ```bash
-# Core (bulk only)
-pip install tissueresolve
-
-# With spatial dependencies (scanpy, scikit-learn)
-pip install "tissueresolve[spatial]"
-
-# Full install including plotting (matplotlib) and report generation
-pip install "tissueresolve[all]"
-```
-
-## Development setup
-
-```bash
-git clone <repo>
+git clone https://github.com/marianaboroni/TissueResolve.git
 cd TissueResolve
-python -m venv .venv && source .venv/bin/activate
-python -m pip install -e ".[all]"
-```
-
-## Running tests
-
-The default suite is fast, deterministic, and **offline** — it never accesses
-the network or downloads datasets.
-
-```bash
+python3 -m venv .venv
 source .venv/bin/activate
-python -m pytest -v                 # full suite
-python -m pytest tests/spatial -v   # one area
-python -m pytest -k compliance -v   # scientific-rule compliance tests
+python -m pip install -U pip
+python -m pip install -e ".[all]"
+python -m pytest -q
 ```
 
-## Bulk quickstart (toy data)
-
-```python
-import numpy as np, pandas as pd
-import tissueresolve as tr
-from tissueresolve.results import ReferenceSignature
-
-genes = [f"GENE_{i:03d}" for i in range(60)]
-cell_types = ["Tcell", "Bcell", "Myeloid"]
-
-# Toy L1-normalised reference signature (genes x cell types)
-rng = np.random.default_rng(0)
-phi = rng.exponential(1.0, (len(genes), len(cell_types)))
-phi /= phi.sum(axis=0, keepdims=True)
-ref = ReferenceSignature(gene_names=genes, cell_types=cell_types, phi=phi)
-
-# Toy bulk counts (genes x samples)
-bulk = pd.DataFrame(
-    rng.poisson(50, (len(genes), 4)),
-    index=genes, columns=[f"sample_{i}" for i in range(4)],
-)
-
-result = tr.deconv_bulk(bulk, ref)          # BulkPipelineResult
-print(result.deconv.proportions)            # mRNA proportions (NOT cell fractions)
-print(result.deconv.ESTIMATE_TYPE)          # 'mRNA_proportion'
-```
-
-## Spatial quickstart (toy data)
-
-```python
-import numpy as np
-import tissueresolve as tr
-from tissueresolve.spatial.benchmark import simulate_visium
-
-ds = simulate_visium(n_spots=80, n_types=3, n_genes=40, seed=0)
-ref = ds.to_reference()
-Y = ds.dense_counts()
-
-result = tr.deconv_spatial(
-    Y, ref, ds.array_row, ds.array_col, ds.lib_sizes, ds.gene_names,
-    marker_genes=list(ds.gene_names),
-)
-print(result.deconv.proportions.head())     # spot-level RNA-derived composition
-print(result.deconv.lambda_spatial)         # smoothing parameter (always recorded)
-
-# Figures (each saves its underlying data) and an HTML report:
-figs = tr.plot_results(result, "out/figs", array_row=ds.array_row, array_col=ds.array_col)
-tr.generate_report(result, "out/report.html", figures=figs)
-```
-
-Or via the CLI: `tissueresolve spatial run --visium ... --reference ... --output ...`
-
-## Reports & figures (publication layer)
-
-TissueResolve produces an interactive HTML report plus publication figures for
-both modalities. Figures are **Plotly** (interactive HTML); static PDF/SVG/PNG
-are written when `kaleido` is installed, otherwise HTML + source data are still
-saved and a warning is recorded. **Every figure writes its source data as a
-`.data.tsv`** next to it.
+For finer dependency control:
 
 ```bash
-pip install "tissueresolve[report]"          # plotly + kaleido + jinja2
+python -m pip install -e ".[spatial,report,realdata]"
+```
 
-# Generate a report from a results directory (tables/ + figures/):
-tissueresolve bulk report --results-dir results/bulk --out results/bulk/report.html
-tissueresolve spatial report --results-dir results/spatial
+## Quickstart
+
+### Bulk
+
+```bash
+tissueresolve run --reference reference.h5ad --query bulk_counts.tsv \
+  --out results/bulk --mode bulk --preset standard
+```
+
+### Spatial
+
+```bash
+tissueresolve run --reference reference.h5ad --query visium.h5ad \
+  --out results/spatial --mode spatial --preset publication
+```
+
+Or use the spatial subcommand:
+
+```bash
+tissueresolve spatial run --visium visium.h5ad \
+  --reference reference.h5ad --output results/spatial
+```
+
+### Generate reports
+
+```bash
 tissueresolve report --modality bulk --results-dir results/bulk
+
+tissueresolve report --modality spatial --results-dir results/spatial
 ```
 
-In Python: `from tissueresolve.report import generate_report` and
-`tissueresolve.plotting.{bulk_plots,spatial_plots,separability_plots,spillover_plots,summary_figures,histology}`.
+## Supported CLI commands
 
-Reports lead with an **executive summary** (cards + a generated paragraph),
-**key findings**, and a single **main publication figure** (`*_main_summary_figure`),
-followed by automatic interpretation. Raw matrices/tables are collapsed into
-"Detailed outputs". A **family-aware palette** keeps each cell type the same
-colour across all figures (saved to `figures/cell_type_color_map.tsv`); main
-figures show top types + "Other". Spatial reports overlay predictions on the
-**H&E image** when available. Warnings are **severity-ranked**
-(INFO/CAUTION/WARNING/CRITICAL) and the report never says "No warnings" when
-separability, spillover, missing bootstrap, low overlap, or H&E/convergence
-issues exist. **Static export requires kaleido**; without it you still get
-interactive HTML and source data, and missing bootstrap shows a message card
-rather than an empty plot. See `docs/output_interpretation.md`.
+- `tissueresolve run`
+- `tissueresolve spatial run`
+- `tissueresolve report`
+- `tissueresolve bulk report`
+- `tissueresolve spatial report`
 
-## Resolution-aware handling of confusable cell types
+> Note: `tissueresolve bulk run` is present in the CLI tree but not yet
+> implemented; use `tissueresolve run --mode bulk` instead.
 
-Fine cell-type panels contain pairs that aren't reliably separable. Instead of
-telling users to "merge manually", TissueResolve generates a **machine-readable
-recommendation**: it groups confusable types into named merge families
-(`recommended_merges.tsv`, `cell_type_families.tsv`) and can produce
-**family-level estimates** as a safer interpretation. Fine estimates are never
-overwritten and merging is always explicit and recorded.
+## Outputs
 
-```python
-from tissueresolve.reference.resolution import (
-    recommend_cell_type_merges, assign_resolution_families)
-from tissueresolve.reference.hierarchy import aggregate_predictions_by_family
-mapping = assign_resolution_families(separability_report, cell_types)
-family_props = aggregate_predictions_by_family(fine_props, mapping)  # mass-preserving
-```
+Runs produce:
 
-`resolution_mode` (`none`/`suggest`/`auto`/`hierarchical`, default `suggest`)
-controls whether merges are only recommended or applied. See
-`docs/output_interpretation.md`.
+- `tables/` — result tables and QC outputs
+- `figures/` — Plotly figures and static exports
+- `report.html` — publication-style report
+- `run_metadata.json` — run provenance
+- `analysis_plan.json` — selected mode and preset
+- `warnings.json` — warnings and issues
+- `methods.txt` — methods text for reports
 
-## Architecture
+## Reports and figures
 
-See `DESIGN_SPEC.md` for the full architecture specification and
-`AUDIT_AND_MIGRATION_PLAN.md` for the migration plan from the CHIMERA and
-SpatCAR legacy packages.
+The reporting layer embeds:
 
-## Non-negotiable output rules
+- executive summary cards
+- key findings and interpretation
+- a main publication figure
+- detailed collapsible outputs
+- warnings and QC notes
 
-- Bulk estimates are always labelled as **mRNA proportions**.
-- Spatial estimates are always labelled as **spot-level composition estimates**.
-- Warnings are never hidden.
-- Genes are never silently removed.
-- Smoothing parameters are always recorded in output metadata.
-- Estimates for non-separable cell-type pairs are always flagged.
+Figure outputs include Plotly HTML and, when `kaleido` is installed,
+PDF/SVG/PNG static exports. Every figure writes a `.data.tsv` source data file.
+
+## Interpretation
+
+- Bulk outputs are RNA-derived **mRNA proportions**, not absolute cell counts.
+- Spatial outputs are spot-level RNA-derived composition estimates, not direct
+  single-cell counts.
+- Non-separable cell-type pairs may be unreliable; family-level interpretation
+  is provided when appropriate.
+- Bootstrap uncertainty is available in publication and diagnostic modes.
+
+## Real-data breast cancer validation
+
+A dedicated validation harness lives in
+`examples/real_breast_cancer/` and is designed to run only when explicitly
+requested.
+
+Scripts include data download, reference building, pseudobulk generation,
+bulk validation, spatial validation, and report generation.
+
+## Documentation
+
+See the documentation pages in `docs/`:
+
+- `docs/tutorial.md`
+- `docs/quickstart.md`
+- `docs/input_formats.md`
+- `docs/advanced_parameters.md`
+- `docs/reporting.md`
+- `docs/output_interpretation.md`
+
+## Status
+
+Research software / pre-release.
 
 ## License
 
-BSD 3-Clause
+License metadata is declared as BSD-3-Clause in `pyproject.toml`.
+A top-level `LICENSE` file is not currently present in this repository.

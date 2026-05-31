@@ -34,4 +34,10 @@ examples/real_breast_cancer/outputs/
 *.loom
 *.mtx
 *.mtx.gz
+*.tar.gz
+*.zip
+__pycache__/
+*.pyc
+demo_demo/
+demo_wiz/
 data/
