@@ -14,10 +14,12 @@ def bulk_methods(include_external: bool = True) -> list[BenchmarkMethod]:
     )
     from benchmarks.bulk.methods.tissueresolve import (
         TissueResolveBulkFlat, TissueResolveBulkHierarchical, TissueResolveBulkAuto,
+        TissueResolveBulkStateAware,
     )
     methods: list[BenchmarkMethod] = [
         TissueResolveBulkAuto(),          # improved: solver=auto (gene-masking CV)
-        TissueResolveBulkHierarchical(),  # resolution-aware broad→fine
+        TissueResolveBulkHierarchical(),  # standard resolution-aware broad→fine
+        TissueResolveBulkStateAware(),    # EXPERIMENTAL broad→cell-type→state
         TissueResolveBulkFlat(),
         # ≥4 executable non-TissueResolve internal baselines (no external deps):
         NNLSBaseline(),

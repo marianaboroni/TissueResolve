@@ -73,6 +73,10 @@ def _solver_bulk_result(bulk, ref, solver: str, cfg):
 def deconv_bulk(
     bulk, ref, *, config=None, resolution_mode: Optional[str] = None,
     hierarchy_mapping: Optional[dict] = None, solver: Optional[str] = None,
+    state_aware: bool = False, reference_adata=None,
+    state_to_celltype: Optional[dict] = None,
+    broad_col: Optional[str] = None, cell_type_col: Optional[str] = None,
+    state_col: Optional[str] = None,
     **kwargs,
 ):
     """Run the bulk deconvolution pipeline.  Returns ``BulkPipelineResult``.
@@ -151,7 +155,77 @@ def deconv_bulk(
         allow_partial_resolution=getattr(hcfg, "allow_partial_resolution", True),
         subtype_confidence_threshold=getattr(hcfg, "subtype_confidence_threshold", 0.10),
     )
+    # Explicit gating kwargs override the cfg-derived defaults (avoids a
+    # duplicate-keyword collision when callers pass e.g. min_discriminating_genes).
+    for _k in list(kwargs):
+        if _k in gate:
+            gate[_k] = kwargs.pop(_k)
+
+    # ---- experimental state-aware (broad → cell type → state) mode ----
+    if state_aware:
+        return _run_state_aware_bulk(
+            bulk, ref, mapping, cfg, gate,
+            reference_adata=reference_adata, state_to_celltype=state_to_celltype,
+            broad_col=broad_col, cell_type_col=cell_type_col, state_col=state_col,
+            **kwargs)
+
     return run_hierarchical_bulk(bulk, ref, mapping, config=cfg, **gate, **kwargs)
+
+
+def _run_state_aware_bulk(bulk, ref, mapping, cfg, gate, *, reference_adata=None,
+                          state_to_celltype=None, broad_col=None,
+                          cell_type_col=None, state_col=None, **kwargs):
+    """Route to the experimental state-aware 3-level solver (default off).
+
+    When no state labels exist (no ``state_to_celltype`` / ``state_col``), runs
+    a two-level fallback (broad → cell type) and records ``fallback_reason``.
+    Granular gene panels are built only when a ``reference_adata`` (per-cell) is
+    provided; otherwise global genes are used (recorded honestly).
+    """
+    import warnings as _warnings
+    from tissueresolve.bulk.state_aware_hierarchical import (
+        run_state_aware_hierarchical_bulk)
+    from tissueresolve.reference.three_level_hierarchy import (
+        build_three_level_hierarchy, build_three_level_from_two_level)
+
+    fallback_reason = None
+    if state_to_celltype:
+        hierarchy = build_three_level_hierarchy(state_to_celltype, mapping)
+    else:
+        hierarchy = build_three_level_from_two_level(mapping)
+        fallback_reason = ("no state labels available; running broad→cell_type "
+                           "two-level fallback (no third-level states)")
+        _warnings.warn("deconv_bulk(state_aware=True): " + fallback_reason,
+                       stacklevel=2)
+
+    celltype_panels = state_panels = None
+    panel_source = "global_genes"
+    if reference_adata is not None and broad_col and cell_type_col:
+        from tissueresolve.reference.granular_signatures import (
+            build_multigranularity_panels)
+        with _warnings.catch_warnings():
+            _warnings.simplefilter("ignore")
+            panels = build_multigranularity_panels(
+                reference_adata, broad_col, cell_type_col, state_col)
+        celltype_panels = panels["celltype_panels"].family_panels
+        state_panels = (panels["state_panels"].family_panels
+                        if panels["state_panels"] is not None else None)
+        panel_source = "granular_within_family"
+
+    result = run_state_aware_hierarchical_bulk(
+        bulk, ref, hierarchy, config=cfg,
+        celltype_panels=celltype_panels, state_panels=state_panels, **gate, **kwargs)
+    result.metadata.update({
+        "hierarchy_mode": "state_aware",
+        "state_aware_enabled": True,
+        "feature_status": "experimental",
+        "broad_col": broad_col, "cell_type_col": cell_type_col,
+        "state_col": state_col,
+        "has_states": hierarchy.has_states,
+        "panel_source": panel_source,
+        "fallback_reason": fallback_reason,
+    })
+    return result
 
 
 def deconv_spatial(

@@ -762,6 +762,62 @@ def _figure_cards(fig_dir, out_dir, manifest, section, captions,
     return "".join(cards)
 
 
+def _state_aware_subsection(C) -> str:
+    """'State-aware / multi-granularity deconvolution' block (graceful/honest).
+
+    Reads ``outputs/signatures/*`` + ``outputs/deconvolution/*`` + state-aware
+    metadata when present; otherwise states plainly that the experimental
+    state-aware path was not run and that the breast-cancer reference has only
+    broad + fine labels (no third-level state labels).
+    """
+    sig_dir = H.OUTPUTS_DIR / "signatures"
+    dec_dir = H.OUTPUTS_DIR / "deconvolution"
+    meta_p = sig_dir / "granularity_signature_metadata.json"
+    parts = ["<h3 style='margin:14px 0 4px;font-size:14px'>State-aware / "
+             "multi-granularity deconvolution</h3>"]
+    parts.append(C.method_box(
+        "Broad-family, cell-type-within-family and (when available) "
+        "state-within-cell-type deconvolution use <b>different</b> gene panels; "
+        "state-level estimates are produced only if state labels exist; "
+        "unresolved mass is kept at the correct level to avoid false precision. "
+        "This mode is <b>experimental</b> until validated across datasets."))
+
+    ran = sig_dir.exists() and any(sig_dir.glob("*.tsv"))
+    if not ran:
+        parts.append("<p class='muted'><b>Status:</b> the experimental "
+                     "state-aware path was not run for this dataset (enable with "
+                     "<code>--state-aware</code> / "
+                     "<code>deconv_bulk(state_aware=True)</code>). The "
+                     "breast-cancer reference carries only <b>broad + fine</b> "
+                     "labels, so <b>no third-level cell-state labels are "
+                     "available</b>; the solver would run in two-level "
+                     "(broad→cell-type) fallback.</p>")
+        return "".join(parts)
+
+    # gene panel summary
+    gw = _read_tsv_plain(sig_dir / "granularity_gene_weights.tsv")
+    if gw is not None and "granularity" in gw.columns:
+        counts = gw.groupby("granularity")["gene"].nunique().to_dict() \
+            if "gene" in gw.columns else {}
+        parts.append(C.metric_grid({
+            "Broad-level genes": counts.get("broad", "—"),
+            "Cell-type-level genes": counts.get("cell_type", "—"),
+            "State-level genes": counts.get("state", "—")}))
+    # solver usage table
+    fam = (_read_tsv_plain(dec_dir / "hierarchical_allocation_metadata.tsv")
+           if dec_dir.exists() else None)
+    if fam is not None and not fam.empty:
+        parts.append(C.collapsible_table(
+            "Solver gene-panel usage per family/cell type",
+            fam.head(40).to_html(index=False, border=0),
+            note="Which panel each level used and the unresolved reason."))
+    # state-aware metadata
+    if meta_p.exists():
+        parts.append(C.collapsible_table(
+            "State-aware run metadata", "<pre>" + C.esc(_read_text(meta_p)) + "</pre>"))
+    return "".join(parts)
+
+
 def _build_mapping(ref):
     """Build the fine→broad mapping from the documented hierarchy (or {})."""
     try:
@@ -1199,6 +1255,7 @@ def generate_unified_report() -> Path:
                 "reference's resolution and are reported at the family level "
                 "(unresolved mass): " + ", ".join(map(str, unres)) + "."])
     sig += C.variable_dictionary(G.subset(["separability", "spillover", "unresolved mass"]))
+    sig += _state_aware_subsection(C)
     sig += C.interpretation_guide(
         "If signature separability is CAUTION/WARNING/FAIL, or a family is listed "
         "as unresolved, interpret those cell types at the family level rather than "

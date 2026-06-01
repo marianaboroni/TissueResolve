@@ -56,6 +56,10 @@ def cli() -> None:
                    "Use when the reference has only fine labels.")
 @click.option("--allow-unresolved/--no-allow-unresolved", default=True,
               help="Keep non-separable families at the broad level as unresolved mass.")
+@click.option("--state-aware", is_flag=True, default=False,
+              help="EXPERIMENTAL: broad→cell-type→state hierarchical deconvolution "
+                   "(requires --resolution-mode hierarchical). Falls back to a "
+                   "two-level broad→cell-type run when no state labels exist.")
 @click.option("--solver",
               type=click.Choice(["auto", "nnls", "weighted_nnls", "marker_nnls",
                                  "ridge_nnls", "ensemble_nnls", "pipeline"]),
@@ -66,8 +70,8 @@ def cli() -> None:
 @click.option("--dry-run", is_flag=True, default=False)
 def run_cli(reference: str, query: str, out: str, mode: str, resolution_mode: str,
             broad_cell_type_col: str, fine_cell_type_col: str,
-            hierarchy_path: str | None, allow_unresolved: bool, solver: str,
-            preset: str, dry_run: bool) -> None:
+            hierarchy_path: str | None, allow_unresolved: bool, state_aware: bool,
+            solver: str, preset: str, dry_run: bool) -> None:
     """User-friendly top-level run: auto-detect inputs, write analysis plan, optionally run pipelines."""
     rc = _run_top_level(
         reference, query, out, mode, preset, resolution_mode,
@@ -75,6 +79,7 @@ def run_cli(reference: str, query: str, out: str, mode: str, resolution_mode: st
         fine_cell_type_col=fine_cell_type_col,
         hierarchy_path=hierarchy_path,
         allow_unresolved=allow_unresolved,
+        state_aware=state_aware,
         solver=solver,
         dry_run=dry_run,
     )
@@ -94,6 +99,7 @@ def _run_top_level(
     fine_cell_type_col: str = "auto",
     hierarchy_path: str | None = None,
     allow_unresolved: bool = True,
+    state_aware: bool = False,
     solver: str = "auto",
     dry_run: bool = False,
 ) -> int:
@@ -149,12 +155,23 @@ def _run_top_level(
         "protocol": proto,
         "solver": solver,
     }
+    # State-aware is experimental and only meaningful in hierarchical mode.
+    state_aware_effective = bool(state_aware and resolution_mode == "hierarchical")
+    plan["hierarchy_mode"] = ("state_aware" if state_aware_effective
+                              else ("hierarchical" if resolution_mode == "hierarchical"
+                                    else "standard"))
+    plan["state_aware_enabled"] = state_aware_effective
+    plan["state_aware_feature_status"] = "experimental"
+    if state_aware and not state_aware_effective:
+        plan["state_aware_fallback_reason"] = (
+            "--state-aware ignored: requires --resolution-mode hierarchical")
     if resolution_mode == "hierarchical":
         plan["hierarchical"] = {
             "broad_cell_type_col": broad_cell_type_col,
             "fine_cell_type_col": fine_cell_type_col,
             "cell_type_hierarchy": hierarchy_path,
             "allow_unresolved": allow_unresolved,
+            "state_aware": state_aware_effective,
         }
     (outp / "analysis_plan.json").write_text(json.dumps(plan, indent=2))
 
@@ -181,7 +198,8 @@ def _run_top_level(
     if resolved_mode == "bulk":
         result = _execute_bulk(
             reference, query, outp, cfg, resolution_mode=resolution_mode,
-            hierarchy_path=hierarchy_path, solver=solver)
+            hierarchy_path=hierarchy_path, solver=solver,
+            state_aware=state_aware_effective)
     else:
         result = _execute_spatial(
             reference, query, outp, cfg, resolution_mode=resolution_mode,
@@ -397,7 +415,8 @@ def _load_reference_signature(path: Path, cfg, estimate_overdispersion: bool = F
 
 
 def _execute_bulk(reference: str, query: str, outp: Path, cfg, resolution_mode: str,
-                  *, hierarchy_path: str | None = None, solver: str = "auto"):
+                  *, hierarchy_path: str | None = None, solver: str = "auto",
+                  state_aware: bool = False):
     from tissueresolve.api import deconv_bulk
 
     ref_path = Path(reference)
@@ -418,6 +437,7 @@ def _execute_bulk(reference: str, query: str, outp: Path, cfg, resolution_mode: 
     # hierarchical mode use the protocol-aware weighted pipeline.
     solver_arg = None if (solver in (None, "pipeline") or
                           resolution_mode == "hierarchical") else solver
+    state_aware_eff = bool(state_aware and resolution_mode == "hierarchical")
     result = deconv_bulk(
         bulk,
         ref,
@@ -425,8 +445,18 @@ def _execute_bulk(reference: str, query: str, outp: Path, cfg, resolution_mode: 
         resolution_mode=resolution_mode,
         hierarchy_mapping=hierarchy_mapping,
         solver=solver_arg,
+        state_aware=state_aware_eff,
         n_bootstrap=cfg.bootstrap.n_bootstrap,
     )
+
+    if state_aware_eff:
+        # state-aware returns a StateAwareBulkResult (different shape): write its
+        # own outputs and expose run metadata for the report.
+        from tissueresolve.bulk.state_aware_hierarchical import (
+            write_state_aware_outputs)
+        write_state_aware_outputs(result, outp / "deconvolution")
+        result.run_metadata = getattr(result, "metadata", {})  # for downstream callers
+        return result
 
     result.deconv.save(outp / "deconv")
     result.qc.save(outp / "qc")
