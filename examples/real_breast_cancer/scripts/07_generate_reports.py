@@ -482,132 +482,347 @@ def _read_text(path) -> str:
     return p.read_text(encoding="utf-8") if p.exists() else ""
 
 
+def _df_collapsible(title, path, max_rows=12, comment="#"):
+    """Top rows inline + full table as a collapsible + source-data link."""
+    from tissueresolve.report import components as C
+    from pathlib import Path as _P
+    p = _P(path)
+    if not p.exists():
+        return ""
+    try:
+        df = pd.read_csv(p, sep="\t", comment=comment)
+    except Exception:
+        return ""
+    head = df.head(max_rows).to_html(index=False, border=0)
+    note = f"(showing top {min(max_rows, len(df))} of {len(df)} rows)" if len(df) > max_rows else ""
+    return C.collapsible_table(title, head, note=note)
+
+
+def _figure_cards(fig_dir, out_dir, manifest, section, captions):
+    """Build figure cards for every figure HTML in *fig_dir*, register in manifest."""
+    from tissueresolve.report import components as C
+    from tissueresolve.report.figures import FigureRecord
+    import os
+    from pathlib import Path as _P
+    fig_dir = _P(fig_dir)
+    if not fig_dir.exists():
+        return ""
+    rel = lambda p: os.path.relpath(p, out_dir)  # noqa: E731
+    cards = []
+    for fh in sorted(fig_dir.glob("*.html")):
+        stem = fh.stem
+        cap = captions.get(stem, captions.get("_default"))
+        data = fh.with_suffix(".data.tsv")
+        links = [("interactive figure", rel(fh))]
+        if data.exists():
+            links.append(("source data (.tsv)", rel(data)))
+        for ext in ("png", "svg", "pdf"):
+            ex = fh.with_suffix("." + ext)
+            if ex.exists():
+                links.append((f"{ext.upper()}", rel(ex)))
+        title = stem.replace("_", " ").strip().capitalize()
+        cards.append(C.figure_card(
+            title=title, subtitle=cap["subtitle"], body_html="",
+            caption=cap["caption"], how_to_read=cap["how_to_read"],
+            methodology=cap.get("methodology", ""),
+            source_links=links))
+        manifest.add(FigureRecord(
+            figure_id=stem, section=section, title=title,
+            html_path=rel(fh), source_data_path=rel(data) if data.exists() else "",
+            methodology=cap.get("methodology", ""), status="ok"))
+    return "".join(cards)
+
+
 def generate_unified_report() -> Path:
-    """One report.html with nav linking every section (the main entry point)."""
-    from tissueresolve.report import templates as T
+    """One report.html with sidebar nav, metric cards, methodology boxes,
+    glossary, figure cards and collapsible tables (the main entry point)."""
+    import os, warnings as _w
+    from tissueresolve.report import components as C
+    from tissueresolve.report import glossary as G
+    from tissueresolve.report.figures import FigureManifest
     from tissueresolve.report.unified import Section, build_unified_report
 
     out_dir = H.OUTPUTS_DIR
-    rel = lambda p: __import__("os").path.relpath(p, out_dir)  # noqa: E731
-
+    rel = lambda p: os.path.relpath(p, out_dir)  # noqa: E731
+    manifest = FigureManifest()
     sections = []
 
-    md = H.OUT_SUMMARY_DIR / "validation_summary.md"
-    sections.append(Section("summary", "1. Executive summary",
-                            "<pre>" + T.escape(_read_text(md)) + "</pre>"
-                            if md.exists() else ""))
-
-    ref_sum = H.OUT_REFERENCE_DIR / "reference_summary.tsv"
-    refq = ""
-    # reference suitability score (PASS/CAUTION/WARNING/FAIL)
+    # ---- gather context (defensive) ----
+    ctx = {"modality": "bulk + spatial", "samples": "—", "spots": "—",
+           "ref_cells": "—", "genes": "—", "broad": "—", "fine": "—",
+           "overlap": "—", "solver": "auto", "resolution_mode": "hierarchical",
+           "high_risk_pairs": "—", "suit": None}
+    ref0 = None
+    mp = None
     try:
-        import warnings as _w
         from tissueresolve.results import ReferenceSignature
-        from tissueresolve.reference.suitability import (
-            compute_reference_suitability_score, save_reference_suitability)
         from tissueresolve.reference.hierarchy import (
             load_hierarchy_mapping, build_cell_type_hierarchy)
-        rdir = H.SAVED_REFERENCE_DIR
+        if H.SAVED_REFERENCE_DIR.exists():
+            ref0 = ReferenceSignature.load(H.SAVED_REFERENCE_DIR)
+            ctx["fine"] = ref0.n_cell_types
+            ctx["genes"] = ref0.n_genes
+            ctx["ref_cells"] = sum(ref0.n_cells_per_type.values()) or "—"
         hmap_p = H.HARNESS_DIR / "config" / "breast_cancer_cell_type_hierarchy.tsv"
-        if rdir.exists():
-            ref0 = ReferenceSignature.load(rdir)
-            qgenes = None
-            if H.PSEUDOBULK_COUNTS.exists():
-                qgenes = list(pd.read_csv(H.PSEUDOBULK_COUNTS, sep="\t", index_col=0,
-                                          comment="#").index.map(str))
-            mp = (build_cell_type_hierarchy(list(ref0.cell_types),
-                                            load_hierarchy_mapping(hmap_p))
-                  if hmap_p.exists() else None)
-            with _w.catch_warnings():
-                _w.simplefilter("ignore")
-                suit = compute_reference_suitability_score(
-                    ref0, query_genes=qgenes, mapping=mp)
-                save_reference_suitability(suit, H.OUT_REFERENCE_DIR)
-            refq += (f"<p>Reference suitability: <b>{suit.classification}</b> "
-                     f"(score={suit.overall_score})</p>"
-                     + suit.components_frame().to_html(border=0))
+        if ref0 is not None and hmap_p.exists():
+            mp = build_cell_type_hierarchy(list(ref0.cell_types), load_hierarchy_mapping(hmap_p))
+            ctx["broad"] = len(set(mp.values()))
     except Exception:
         pass
-    if ref_sum.exists():
-        try:
-            refq += pd.read_csv(ref_sum, sep="\t", comment="#").head(40).to_html(index=False, border=0)
-        except Exception:
-            pass
+    try:
+        if H.PSEUDOBULK_TRUE_PROPS.exists():
+            tp = pd.read_csv(H.PSEUDOBULK_TRUE_PROPS, sep="\t", comment="#", index_col=0)
+            ctx["samples"] = tp.shape[0]
+    except Exception:
+        pass
+    try:
+        sp = H.OUT_SPATIAL_DIR / "spatial_spot_proportions.tsv"
+        if sp.exists():
+            ctx["spots"] = pd.read_csv(sp, sep="\t", comment="#", index_col=0).shape[0]
+    except Exception:
+        pass
+    try:
+        if ref0 is not None and H.PSEUDOBULK_COUNTS.exists():
+            qg = set(pd.read_csv(H.PSEUDOBULK_COUNTS, sep="\t", comment="#", index_col=0).index.map(str))
+            ctx["overlap"] = len(qg & set(map(str, ref0.gene_names)))
+    except Exception:
+        pass
+    bench = H.HARNESS_DIR.parent.parent / "benchmarks" / "outputs" / "benchmark_summary_report.html"
+    bench_status = "available" if bench.exists() else "not run"
+
+    # ---- 1. Executive summary ----
+    cards = {"Modality": ctx["modality"], "Samples (bulk)": ctx["samples"],
+             "Spots (spatial)": ctx["spots"], "Reference cells": ctx["ref_cells"],
+             "Genes": ctx["genes"], "Broad families": ctx["broad"],
+             "Fine subpopulations": ctx["fine"], "Gene overlap": ctx["overlap"],
+             "Solver": ctx["solver"], "Resolution mode": ctx["resolution_mode"],
+             "Benchmark": bench_status, "Report": "generated"}
+    summ = (C.metric_grid(cards)
+            + C.estimate_note(
+                "This report summarizes reference quality, input-data checks, "
+                "deconvolution predictions, model diagnostics, resolution limits, "
+                "and benchmark results. The values shown are <b>RNA-derived "
+                "estimates</b> and should be interpreted together with QC, "
+                "separability, and uncertainty metrics. The report does not infer "
+                "biological meaning beyond what the data support.")
+            + C.interpretation_guide(
+                "Use the sidebar to jump to a section. Start here for the headline "
+                "numbers, then check reference quality and warnings before trusting "
+                "fine-grained predictions."))
+    md = H.OUT_SUMMARY_DIR / "validation_summary.md"
+    if md.exists():
+        summ += C.collapsible_table("Text validation summary",
+                                    "<pre>" + C.esc(_read_text(md)) + "</pre>")
+    sections.append(Section("summary", "1. Executive summary", summ))
+
+    # ---- 2. Reference quality ----
+    refq = C.methodology_summary([
+        "Reference built from a single-cell/nucleus h5ad by aggregating per-cell "
+        "profiles into per-cell-type signatures (CPM).",
+        "Broad and fine labels taken from the documented hierarchy mapping; gene "
+        "identifiers harmonized to symbols.",
+        "Minimum cells per type enforced; cross-donor variability recorded when "
+        "multiple donors are present.",
+    ])
+    try:
+        from tissueresolve.reference.suitability import (
+            compute_reference_suitability_score, save_reference_suitability)
+        if ref0 is not None:
+            qgenes = (list(pd.read_csv(H.PSEUDOBULK_COUNTS, sep="\t", index_col=0,
+                                       comment="#").index.map(str))
+                      if H.PSEUDOBULK_COUNTS.exists() else None)
+            with _w.catch_warnings():
+                _w.simplefilter("ignore")
+                suit = compute_reference_suitability_score(ref0, query_genes=qgenes, mapping=mp)
+                save_reference_suitability(suit, H.OUT_REFERENCE_DIR)
+            refq += (f"<p>Overall suitability: {C.status_badge(suit.classification)} "
+                     f"(score {suit.overall_score})</p>"
+                     + C.collapsible_table("Suitability components",
+                                           suit.components_frame().to_html(border=0)))
+    except Exception:
+        pass
+    refq += _figure_cards(H.OUT_REFERENCE_DIR / "figures", out_dir, manifest,
+                          "reference", _CAPTIONS)
+    refq += C.variable_dictionary(G.subset(["separability", "spillover", "gene overlap"]))
+    refq += C.interpretation_guide(
+        "Use this section to decide whether your reference is balanced, compatible "
+        "with your query, and sufficiently annotated. CAUTION/WARNING/FAIL flags "
+        "highlight components to check before trusting fine predictions.")
     sections.append(Section("reference", "2. Reference quality", refq,
                             links=[("reference tables", rel(H.OUT_REFERENCE_DIR))]))
 
-    sections.append(Section("input", "3. Input data",
-                            "<p>Bulk pseudobulk mixtures and a 10x Visium section "
-                            "(see the linked detailed reports).</p>"))
+    # ---- 3. Input data ----
+    inp = C.methodology_summary([
+        "Bulk: pseudobulk count mixtures with known ground-truth proportions.",
+        "Spatial: a 10x Visium section (counts + array coordinates; H&E when present).",
+        "Gene overlap with the reference is computed and reported; nothing is "
+        "silently re-normalized.",
+    ]) + C.metric_grid({"Bulk samples": ctx["samples"], "Spatial spots": ctx["spots"],
+                        "Gene overlap": ctx["overlap"]})
+    inp += C.interpretation_guide(
+        "Check that gene overlap is high and that the input type/normalization "
+        "matches expectations before interpreting predictions.")
+    sections.append(Section("input", "3. Input data quality", inp))
 
-    bulk_links = [("detailed bulk report", rel(H.OUT_BULK_DIR / "report.html"))] \
+    # ---- 4. Bulk ----
+    bulk = C.methodology_summary([
+        "Solver backbone selected automatically (solver=auto) by gene-masking "
+        "cross-validation; the chosen backbone is recorded.",
+        "Estimates are mRNA-derived proportions (rows sum to 1), NOT absolute "
+        "cell fractions.",
+    ])
+    bulk += _figure_cards(H.OUT_BULK_DIR / "figures", out_dir, manifest, "bulk", _CAPTIONS)
+    bulk += _df_collapsible("Estimated proportions (source data)",
+                            H.OUT_BULK_DIR / "bulk_estimated_proportions.tsv")
+    bulk += C.variable_dictionary(G.subset(["mRNA-derived proportion", "coverage R²", "unresolved mass"]))
+    bulk += C.interpretation_guide(
+        "Use this section to compare composition across samples. Check whether "
+        "clustering matches expected sample groups and whether high-risk or "
+        "high-spillover populations dominate a sample.")
+    blinks = [("detailed bulk report", rel(H.OUT_BULK_DIR / "report.html"))] \
         if (H.OUT_BULK_DIR / "report.html").exists() else []
-    sections.append(Section("bulk", "4. Bulk results",
-                            "<p>RNA-derived mRNA proportions (not cell fractions).</p>",
-                            links=bulk_links))
+    sections.append(Section("bulk", "4. Bulk deconvolution", bulk, links=blinks))
 
-    spatial_links = [("detailed spatial report", rel(H.OUT_SPATIAL_DIR / "report.html"))] \
+    # ---- 5. Spatial ----
+    he_present = any((H.OUT_SPATIAL_DIR / "figures").glob("*he*")) if (H.OUT_SPATIAL_DIR / "figures").exists() else False
+    spat = C.methodology_summary([
+        "Counts deconvolved per spot with an NB-CAR model; spatial smoothing "
+        "(lambda_spatial) is recorded and never hidden.",
+        "Array coordinates define the spot graph; H&E overlays are shown when an "
+        "image is available.",
+        "Real Visium has NO ground truth — results are concordance/structure, not "
+        "accuracy.",
+    ])
+    spat += _figure_cards(H.OUT_SPATIAL_DIR / "figures", out_dir, manifest, "spatial", _CAPTIONS)
+    spat += C.variable_dictionary(G.subset(["entropy", "dominant fraction", "near-zero fraction", "Moran's I"]))
+    spat += C.interpretation_guide(
+        "Use this section to inspect where predicted RNA-derived compositions "
+        "localize in tissue. Compare overlays with H&E morphology, but do not "
+        "treat predictions as direct cell counts.")
+    if he_present:
+        spat = "<p class='muted'>H&E overlay figures are included below.</p>" + spat
+    slinks = [("detailed spatial report", rel(H.OUT_SPATIAL_DIR / "report.html"))] \
         if (H.OUT_SPATIAL_DIR / "report.html").exists() else []
-    sections.append(Section("spatial", "5. Spatial results",
-                            "<p>Spot-level RNA-derived composition (not cell counts).</p>",
-                            links=spatial_links))
+    sections.append(Section("spatial", "5. Spatial deconvolution", spat, links=slinks))
 
+    # ---- 6. Hierarchical ----
     hier_dir = H.OUTPUTS_DIR / "hierarchical"
+    hier = C.methodology_summary([
+        "Broad-to-fine strategy: estimate broad families first, then fine "
+        "subpopulations within each family.",
+        "Partial resolution: confident subtypes receive mass; ambiguous remainder "
+        "is reported as unresolved_<family>.",
+        "Fine subtype estimates in low-separability families should be treated "
+        "cautiously (interpret at the family level).",
+    ])
     hmd = hier_dir / "hierarchical_summary.md"
-    hbody = "<pre>" + T.escape(_read_text(hmd)) + "</pre>" if hmd.exists() else ""
+    if hmd.exists():
+        hier += C.collapsible_table("Hierarchical summary",
+                                    "<pre>" + C.esc(_read_text(hmd)) + "</pre>", open=True)
+    hier += _df_collapsible("Within-family resolvability QC",
+                            hier_dir / "hierarchical_qc.tsv")
+    hier += C.variable_dictionary(G.subset(["unresolved mass", "separability", "spillover"]))
+    hier += C.interpretation_guide(
+        "Use this section to see which families could be split into reliable "
+        "subtypes and which are reported at the family level (unresolved mass).")
     hlinks = [("hierarchical tables", rel(hier_dir))] if hier_dir.exists() else []
-    sections.append(Section("hierarchical", "6. Hierarchical broad→fine results",
-                            hbody, links=hlinks))
+    sections.append(Section("hierarchical", "6. Hierarchical broad→fine deconvolution",
+                            hier, links=hlinks))
 
+    # ---- 7. Resolution / separability / spillover ----
     res_dir = H.OUT_RESOLUTION_DIR
-    rlinks = [("resolution / separability / spillover", rel(res_dir))] if res_dir.exists() else []
+    resb = C.methodology_summary([
+        "Pairwise separability computed from the reference expression profiles "
+        "(1 − Bhattacharyya coefficient).",
+        "High-risk pairs (BC > 0.90) and per-family resolution summaries highlight "
+        "where fine labels are unreliable.",
+    ])
+    resb += _df_collapsible("Top non-separable pairs",
+                            res_dir / "pairwise_separability.tsv")
+    resb += C.variable_dictionary(G.subset(["separability", "spillover", "unresolved mass"]))
+    resb += C.interpretation_guide(
+        "Use this to judge what resolution you can trust: families with many "
+        "non-separable subtypes should be interpreted at the broad level.")
+    rlinks = [("resolution outputs", rel(res_dir))] if res_dir.exists() else []
     sections.append(Section("resolution", "7. Resolution, separability & spillover",
-                            "<p>Pairwise separability and spillover diagnostics.</p>",
-                            links=rlinks))
+                            resb, links=rlinks))
 
-    bench = H.HARNESS_DIR.parent.parent / "benchmarks" / "outputs" / "benchmark_summary_report.html"
-    blinks = [("benchmark summary report", rel(bench))] if bench.exists() else []
-    sections.append(Section("benchmark", "8. Benchmark comparison",
-                            "<p>Comparison of TissueResolve (flat + hierarchical) "
-                            "against baselines and external tools. Accuracy is "
-                            "reported only where ground truth exists.</p>",
-                            links=blinks))
+    # ---- 8. Benchmark ----
+    benchb = C.methodology_summary([
+        "Methods compared on identical harmonized inputs.",
+        "Only EXECUTED or IMPORTED methods are ranked; EXPORTED-only and SKIPPED "
+        "tools are listed but not scored.",
+        "Bulk pseudobulk has ground truth (accuracy valid); real Visium does not "
+        "(concordance/structure only).",
+    ])
+    benchb += _df_collapsible("Best-method summary",
+                              bench.parent / "bulk" / "best_method_summary.tsv")
+    benchb += C.variable_dictionary(G.subset(
+        ["Pearson correlation", "RMSE", "concordance", "composite score"]))
+    benchb += C.interpretation_guide(
+        "Use this section to compare methods. Only executed or imported methods "
+        "are ranked; exported-only tools are listed but not scored.")
+    blinks2 = [("benchmark summary report", rel(bench))] if bench.exists() else []
+    sections.append(Section("benchmark", "8. Benchmark comparison", benchb, links=blinks2))
 
+    # ---- 9. Warnings & limitations ----
     warns = H.OUT_SUMMARY_DIR / "warnings.json"
-    wbody = ""
+    warn_items = []
     if warns.exists():
         try:
             w = json.loads(_read_text(warns))
-            items = w if isinstance(w, list) else w.get("warnings", [])
-            wbody = ("<div class='warn'><ul>" + "".join(
-                f"<li>{T.escape(str(x))}</li>" for x in items[:50]) + "</ul></div>") \
-                if items else "<p>No warnings recorded.</p>"
+            warn_items = w if isinstance(w, list) else w.get("warnings", [])
         except Exception:
-            wbody = ""
-    sections.append(Section("warnings", "9. Warnings & recommended actions", wbody))
+            warn_items = []
+    wbody = C.warning_box(warn_items) if warn_items else \
+        "<p class='muted'>No warnings recorded for this run.</p>"
+    wbody += C.limitation_box([
+        "Bulk estimates are RNA-derived proportions, not absolute cell fractions.",
+        "Spatial estimates are spot-level RNA-derived composition, not cell counts; "
+        "real Visium has no ground truth.",
+        "Fine subtype estimates in non-separable families are reported as "
+        "unresolved mass; do not over-interpret them.",
+    ])
+    sections.append(Section("warnings", "9. Warnings & limitations", wbody))
 
-    figs = []
-    for d in (H.OUT_BULK_DIR, H.OUT_SPATIAL_DIR):
-        figs += sorted((d / "figures").glob("*.html")) if (d / "figures").exists() else []
-    fbody = ("<ul>" + "".join(f"<li><a href='{rel(f)}'>{f.name}</a></li>"
-                              for f in figs[:60]) + "</ul>") if figs else ""
-    sections.append(Section("figures", "10. Publication figures", fbody))
-
+    # ---- 10. Methods ----
     methods = H.OUT_SUMMARY_DIR / "methods.txt"
-    sections.append(Section("methods", "11. Methods",
-                            "<pre>" + T.escape(_read_text(methods)) + "</pre>"
-                            if methods.exists() else ""))
+    mbody = ("<pre>" + C.esc(_read_text(methods)) + "</pre>" if methods.exists()
+             else "<p class='muted'>Methods text not available.</p>")
+    sections.append(Section("methods", "10. Methods", mbody))
 
-    out_files = sorted(p for p in out_dir.rglob("*.tsv"))[:80]
-    obody = ("<ul>" + "".join(f"<li>{rel(p)}</li>" for p in out_files) + "</ul>") \
-        if out_files else ""
-    sections.append(Section("outputs", "12. Output files", obody))
+    # ---- 11. Output files & source data ----
+    man_path = manifest.save(out_dir / "figures")
+    out_files = sorted(p for p in out_dir.rglob("*.tsv"))[:100]
+    obody = (C.estimate_note(f"Figure manifest: {rel(man_path)} "
+                             f"({len(manifest.records)} figures registered).")
+             + C.collapsible_table("All source-data tables (.tsv)",
+                                   "<ul>" + "".join(f"<li>{C.esc(rel(p))}</li>"
+                                                    for p in out_files) + "</ul>"))
+    sections.append(Section("outputs", "11. Output files & source data", obody))
 
     path = build_unified_report(
         out_dir / "report.html", sections,
         title="TissueResolve — breast-cancer analysis report",
-        subtitle="One page; click a section above. Detailed sub-reports are linked.")
+        subtitle="RNA-derived estimates with QC, resolution limits and benchmarks")
     return path
+
+
+# Per-figure captions: title is derived from filename; these add the
+# subtitle / full caption / how-to-read.  '_default' covers any unlisted figure.
+_CAPTIONS = {
+    "_default": {
+        "subtitle": "TissueResolve figure",
+        "caption": "Visual summary of a TissueResolve output. Axes, colors and "
+                   "values are described in the linked source data; values are "
+                   "RNA-derived estimates, not absolute cell counts.",
+        "how_to_read": "Open the interactive figure and its source data (.tsv). "
+                       "Check whether patterns match expected groupings and whether "
+                       "low-confidence or high-spillover populations dominate.",
+        "methodology": "Generated by TissueResolve from the harmonized reference "
+                       "and query; see the section methodology box for details.",
+    },
+}
 
 
 def main(argv: list[str] | None = None) -> int:
