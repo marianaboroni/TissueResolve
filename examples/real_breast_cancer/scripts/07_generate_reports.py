@@ -735,11 +735,168 @@ def _figure_cards(fig_dir, out_dir, manifest, section, captions):
             caption=cap["caption"], how_to_read=cap["how_to_read"],
             methodology=cap.get("methodology", ""),
             source_links=links))
+        png_rel = rel(png) if png.exists() else ""
         manifest.add(FigureRecord(
             figure_id=stem, section=section, title=title,
-            html_path=rel(fh), source_data_path=rel(data) if data.exists() else "",
-            methodology=cap.get("methodology", ""), status="ok"))
+            html_path=rel(fh), png_path=png_rel,
+            source_data_path=rel(data) if data.exists() else "",
+            caption=cap.get("caption", ""),
+            methodology=cap.get("methodology", ""), status="generated"))
     return "".join(cards)
+
+
+def _build_mapping(ref):
+    """Build the fine→broad mapping from the documented hierarchy (or {})."""
+    try:
+        from tissueresolve.reference.hierarchy import (
+            build_cell_type_hierarchy, load_hierarchy_mapping)
+        hmap_p = H.HARNESS_DIR / "config" / "breast_cancer_cell_type_hierarchy.tsv"
+        if ref is not None and hmap_p.exists():
+            return build_cell_type_hierarchy(list(ref.cell_types),
+                                             load_hierarchy_mapping(hmap_p))
+    except Exception:
+        pass
+    return {}
+
+
+def generate_diagnostic_figures(ref) -> list[dict]:
+    """Generate the reference-QC, signature-QC and resolution figures.
+
+    Writes figures (HTML + PNG + .data.tsv) into the section ``figures/`` dirs so
+    the unified report embeds them automatically.  Returns a list of
+    ``{figure_id, section, reason}`` for figures whose inputs were missing
+    (recorded as ``missing_data`` in the manifest) — never crashes.
+    """
+    missing: list[dict] = []
+
+    def _safe(fig_id, section, fn):
+        try:
+            fn()
+        except Exception as exc:  # missing data / optional input
+            missing.append({"figure_id": fig_id, "section": section,
+                            "reason": str(exc)[:300]})
+
+    mp = _build_mapping(ref)
+    # cell counts per type (prefer the saved table; fall back to the ref object)
+    counts = {}
+    ctc = _read_tsv(H.OUT_REFERENCE_DIR / "cell_type_counts.tsv")
+    if ctc is not None and "n_cells" in ctc.columns:
+        counts = ctc["n_cells"].to_dict()
+    elif ref is not None and getattr(ref, "n_cells_per_type", None):
+        counts = dict(ref.n_cells_per_type)
+
+    sep = _read_tsv_plain(H.OUTPUTS_DIR / "resolution" / "pairwise_separability.tsv")
+    hsum = _hierarchy_summary()
+    unresolved = (hsum.get("bulk_unresolved_families")
+                  or hsum.get("spatial_unresolved_families") or [])
+
+    # ---- Reference QC figures (section 2) ----
+    ref_fig = H.OUT_REFERENCE_DIR / "figures"
+    from tissueresolve.plotting import reference_qc_plots as RQ
+    _safe("reference_broad_family_composition", "reference",
+          lambda: RQ.plot_reference_broad_family_composition(counts, mp, ref_fig))
+    _safe("reference_fine_subpopulation_support", "reference",
+          lambda: RQ.plot_reference_fine_subpopulation_support(counts, mp, ref_fig))
+    _safe("reference_celltype_imbalance", "reference",
+          lambda: RQ.plot_reference_celltype_imbalance(counts, ref_fig))
+    _safe("gene_overlap_by_modality", "reference",
+          lambda: RQ.plot_gene_overlap_by_modality(_gene_overlap_by_modality(), ref_fig))
+    comp = _read_tsv_plain(H.OUT_REFERENCE_DIR / "reference_suitability_components.tsv")
+    _safe("reference_suitability_components", "reference",
+          lambda: RQ.plot_reference_suitability_components(comp, ref_fig))
+
+    # ---- Signature quality & hierarchy figures (section 3) ----
+    sig_fig = H.OUTPUTS_DIR / "signature" / "figures"
+    from tissueresolve.plotting import signature_qc_plots as SQ
+    if ref is not None and getattr(ref, "R_log", None) is not None:
+        _safe("signature_matrix_heatmap", "signature",
+              lambda: SQ.plot_signature_matrix_heatmap(
+                  ref.R_log, ref.gene_names, ref.cell_types, mp, sig_fig))
+    else:
+        missing.append({"figure_id": "signature_matrix_heatmap",
+                        "section": "signature",
+                        "reason": "reference signature matrix (R_log) unavailable"})
+    _safe("top_confusable_pairs", "signature",
+          lambda: SQ.plot_top_confusable_pairs(sep, sig_fig))
+    _safe("within_vs_between_family_separability", "signature",
+          lambda: SQ.plot_within_vs_between_family_separability(sep, mp, sig_fig))
+    _safe("hierarchy_map", "signature",
+          lambda: SQ.plot_hierarchy_map(counts, mp, sig_fig,
+                                        unresolved_families=unresolved))
+    _safe("marker_support_by_family", "signature",
+          lambda: SQ.plot_marker_support_by_family(sep, mp, sig_fig))
+
+    # ---- Resolution / spillover / unresolved figures (section 8) ----
+    res_fig = H.OUT_RESOLUTION_DIR / "figures"
+    from tissueresolve.plotting import resolution_plots as RES
+    _safe("separability_distribution", "resolution",
+          lambda: RES.plot_separability_distribution(sep, res_fig))
+    um = _read_tsv_plain(H.OUTPUTS_DIR / "hierarchical" / "bulk_unresolved_family_mass.tsv")
+    _safe("unresolved_mass_by_family", "resolution",
+          lambda: RES.plot_unresolved_mass_by_family(um, res_fig))
+    _safe("trusted_resolution_summary", "resolution",
+          lambda: RES.plot_trusted_resolution_summary(
+              mp, sep, res_fig, unresolved_families=unresolved))
+    return missing
+
+
+def generate_benchmark_figures() -> list[dict]:
+    """Generate benchmark figures from the benchmark harness TSVs (if present)."""
+    missing: list[dict] = []
+    bench_out = H.HARNESS_DIR.parent.parent / "benchmarks" / "outputs"
+    fig_dir = H.OUTPUTS_DIR / "benchmark" / "figures"
+    status_p = bench_out / "real_external_method_status.tsv"
+    comp_p = bench_out / "composite_scores.tsv"
+    if not status_p.exists() and not comp_p.exists():
+        return [{"figure_id": "benchmark_figures", "section": "benchmark",
+                 "reason": "no benchmark outputs found (run benchmarks/ first)"}]
+    from tissueresolve.plotting import benchmark_report_plots as BP
+
+    def _safe(fig_id, fn):
+        try:
+            fn()
+        except Exception as exc:
+            missing.append({"figure_id": fig_id, "section": "benchmark",
+                            "reason": str(exc)[:300]})
+
+    status = _read_tsv_plain(status_p)
+    comp = _read_tsv_plain(comp_p)
+    if status is not None:
+        _safe("benchmark_method_status_summary",
+              lambda: BP.plot_benchmark_method_status(status, fig_dir))
+        _safe("bulk_accuracy_leaderboard",
+              lambda: BP.plot_bulk_accuracy_leaderboard(status, fig_dir))
+        _safe("runtime_comparison",
+              lambda: BP.plot_runtime_comparison(status, fig_dir))
+    if comp is not None:
+        _safe("composite_scorecard",
+              lambda: BP.plot_composite_scorecard(comp, fig_dir))
+    return missing
+
+
+def _read_tsv_plain(p):
+    """Read a TSV with a comment header but WITHOUT forcing an index column."""
+    try:
+        return pd.read_csv(p, sep="\t", comment="#")
+    except Exception:
+        return None
+
+
+def _gene_overlap_by_modality() -> dict:
+    """Collect {modality: {n_reference, n_query, n_shared}} from QC warnings."""
+    out = {}
+    for modality, path in (("bulk", H.OUT_BULK_DIR / "bulk_warnings.json"),
+                           ("spatial", H.OUT_SPATIAL_DIR / "spatial_warnings.json")):
+        if path.exists():
+            try:
+                go = (json.loads(_read_text(path)) or {}).get("gene_overlap") or {}
+                if go:
+                    out[modality] = {"n_reference": go.get("n_reference", 0),
+                                     "n_query": go.get("n_query", 0),
+                                     "n_shared": go.get("n_shared", 0)}
+            except Exception:
+                pass
+    return out
 
 
 def generate_unified_report() -> Path:
@@ -928,6 +1085,10 @@ def generate_unified_report() -> Path:
                 " &nbsp; Hierarchy quality: "
                 f"{C.status_badge(_component_status(suit, 'hierarchy_quality', 'UNKNOWN'))}"
                 "</p>")
+    # Signature-QC figures (heatmap, confusable pairs, within/between, hierarchy,
+    # marker support) — visual summaries before the raw table.
+    sig += _figure_cards(H.OUTPUTS_DIR / "signature" / "figures", out_dir,
+                         manifest, "signature", _CAPTIONS)
     # Top confusable pairs (compact view; full table is source data)
     sep_p = H.OUTPUTS_DIR / "resolution" / "pairwise_separability.tsv"
     if sep_p.exists():
@@ -1060,6 +1221,8 @@ def generate_unified_report() -> Path:
         "High-risk pairs (BC > 0.90) and per-family resolution summaries highlight "
         "where fine labels are unreliable.",
     ])
+    resb += _figure_cards(res_dir / "figures", out_dir, manifest,
+                          "resolution", _CAPTIONS)
     resb += _df_collapsible("Top non-separable pairs",
                             res_dir / "pairwise_separability.tsv")
     resb += C.variable_dictionary(G.subset(["separability", "spillover", "unresolved mass"]))
@@ -1077,7 +1240,11 @@ def generate_unified_report() -> Path:
         "tools are listed but not scored.",
         "Bulk pseudobulk has ground truth (accuracy valid); real Visium does not "
         "(concordance/structure only).",
+        "Measured metrics (status, accuracy, runtime) come first; the weighted "
+        "composite is a scorecard, not objective accuracy.",
     ])
+    benchb += _figure_cards(H.OUTPUTS_DIR / "benchmark" / "figures", out_dir,
+                            manifest, "benchmark", _CAPTIONS)
     benchb += _df_collapsible("Best-method summary",
                               bench.parent / "bulk" / "best_method_summary.tsv")
     benchb += C.variable_dictionary(G.subset(
@@ -1110,10 +1277,32 @@ def generate_unified_report() -> Path:
     sections.append(Section("methods", "11. Methods", mbody))
 
     # ---- 11. Output files & source data ----
+    # Record figures that could not be generated (missing input data) so the
+    # manifest is honest rather than silently omitting them.
+    from tissueresolve.report.figures import FigureRecord, STATUS_MISSING_DATA
+    mf = H.OUT_SUMMARY_DIR / "missing_figures.json"
+    n_missing = 0
+    if mf.exists():
+        try:
+            for rec in (json.loads(_read_text(mf)) or []):
+                manifest.add(FigureRecord(
+                    figure_id=str(rec.get("figure_id", "")),
+                    section=str(rec.get("section", "")),
+                    title=str(rec.get("figure_id", "")).replace("_", " ").capitalize(),
+                    status=STATUS_MISSING_DATA,
+                    reason_if_missing=str(rec.get("reason", ""))))
+                n_missing += 1
+        except Exception:
+            pass
     man_path = manifest.save(out_dir / "figures")
+    n_gen = len(manifest.records) - n_missing
     out_files = sorted(p for p in out_dir.rglob("*.tsv"))[:100]
-    obody = (C.estimate_note(f"Figure manifest: {rel(man_path)} "
-                             f"({len(manifest.records)} figures registered).")
+    obody = (C.estimate_note(
+                 f"Figure manifest: {rel(man_path)} — {n_gen} figures generated, "
+                 f"{n_missing} recorded as missing_data (with reasons).")
+             + C.metric_grid({"Figures generated": n_gen,
+                              "Figures missing data": n_missing,
+                              "Source-data tables": len(out_files)})
              + C.collapsible_table("All source-data tables (.tsv)",
                                    "<ul>" + "".join(f"<li>{C.esc(rel(p))}</li>"
                                                     for p in out_files) + "</ul>"))
@@ -1131,6 +1320,208 @@ def generate_unified_report() -> Path:
 # specific (non-generic) caption built from their humanized title via
 # `_caption_for`, so no figure carries a generic "TissueResolve output" caption.
 _CAPTIONS = {
+    # ---- Reference QC (section 2) ----
+    "reference_broad_family_composition": {
+        "subtitle": "reference composition by broad family",
+        "caption": "Reference composition by broad cell family. Horizontal bars "
+                   "show the number of reference single-cell/nucleus profiles per "
+                   "broad family (x-axis = cells; y-axis = family), sorted by "
+                   "abundance; colours are the deterministic broad-family palette "
+                   "reused throughout the report. Source: cell_type_counts.tsv + "
+                   "hierarchy mapping. A reference dominated by one family, or "
+                   "lacking support for rare families, can yield less stable "
+                   "signatures.",
+        "how_to_read": "Check whether one family dominates or a needed family is "
+                       "barely represented.",
+        "methodology": "Per-cell-type counts aggregated to broad families via the "
+                       "documented hierarchy mapping.",
+    },
+    "reference_fine_subpopulation_support": {
+        "subtitle": "fine-label support within families",
+        "caption": "Reference support for fine subpopulations. Bars show reference "
+                   "cells per fine label (x-axis), grouped by broad family and "
+                   "coloured with the family's subtone; the dashed line marks the "
+                   "minimum-cell support threshold. Source: cell_type_counts.tsv + "
+                   "mapping. Fine labels below the threshold have weak signatures.",
+        "how_to_read": "Treat fine labels below the threshold line cautiously.",
+        "methodology": "Per-fine-label counts; family subtones from the "
+                       "hierarchical palette.",
+    },
+    "reference_celltype_imbalance": {
+        "subtitle": "abundance imbalance",
+        "caption": "Reference imbalance across cell types. Cell types are ranked "
+                   "by abundance (x-axis) with cell counts (y-axis); the subtitle "
+                   "reports a Gini imbalance score (0 = even, 1 = one type "
+                   "dominates). Source: cell_type_counts.tsv. Strong imbalance can "
+                   "destabilise rare-type signatures.",
+        "how_to_read": "A high Gini or one towering bar means rare types are "
+                       "under-supported.",
+        "methodology": "Counts ranked; Gini computed from the count distribution.",
+    },
+    "gene_overlap_by_modality": {
+        "subtitle": "reference vs query gene overlap",
+        "caption": "Gene overlap between reference and query data. Grouped bars "
+                   "show reference, query and shared gene counts per input "
+                   "modality (bulk / spatial). Source: per-modality gene_overlap "
+                   "in the QC warnings. Only shared genes inform deconvolution; "
+                   "low overlap weakens estimates.",
+        "how_to_read": "Check the shared-gene bar is a large fraction of the "
+                       "reference genes.",
+        "methodology": "Gene-set intersection computed during QC; nothing is "
+                       "silently re-normalized.",
+    },
+    "reference_suitability_components": {
+        "subtitle": "suitability traffic light",
+        "caption": "Reference suitability components. Horizontal bars per component "
+                   "(gene overlap, protocol, library, batch, marker stability, "
+                   "cell-type balance, separability, hierarchy) coloured "
+                   "PASS/CAUTION/WARNING/FAIL/UNKNOWN; bar length = component score "
+                   "(full bar when N/A). Source: reference_suitability_components."
+                   "tsv. WARNING/FAIL components should be addressed before "
+                   "trusting fine predictions.",
+        "how_to_read": "Focus on WARNING/FAIL components; UNKNOWN means metadata "
+                       "was not provided.",
+        "methodology": "Reference suitability scoring (see suitability report).",
+    },
+    # ---- Signature quality & hierarchy (section 3) ----
+    "signature_matrix_heatmap": {
+        "subtitle": "top signature genes × cell types",
+        "caption": "Reference signature matrix. Heatmap of the most variable "
+                   "signature genes (rows) across cell types (columns, grouped by "
+                   "broad family); colour is the row z-scored signature value "
+                   "(display only). Source: reference signature matrix (full "
+                   "matrix is the saved reference). Distinct column blocks mean "
+                   "cell types have separable signatures.",
+        "how_to_read": "Look for genes that are high in one cell type and low in "
+                       "others (good markers); flat rows are uninformative.",
+        "methodology": "Top-variance genes selected; rows z-scored for display.",
+    },
+    "top_confusable_pairs": {
+        "subtitle": "least-separable pairs",
+        "caption": "Most difficult-to-distinguish cell-type pairs. Lollipops show "
+                   "the least-separable pairs (x-axis = 1 − Bhattacharyya; y-axis "
+                   "= pair), coloured by severity (red = worst). Source: "
+                   "pairwise_separability.tsv. Low-separability pairs have "
+                   "unreliable fine labels — interpret at the family level.",
+        "how_to_read": "Pairs near 0 (red) cannot be reliably told apart.",
+        "methodology": "Pairs ranked by ascending separability (1 − Bhattacharyya).",
+    },
+    "within_vs_between_family_separability": {
+        "subtitle": "within vs between family",
+        "caption": "Separability within and between broad families. Box + points "
+                   "of separability (y-axis) for within-family vs between-family "
+                   "pairs. Source: pairwise_separability.tsv + hierarchy mapping. "
+                   "Lower within-family separability means subtypes of a family "
+                   "are hard to resolve.",
+        "how_to_read": "If the within-family box sits much lower, prefer "
+                       "family-level results.",
+        "methodology": "Pairs grouped by whether the two types share a broad "
+                       "family.",
+    },
+    "hierarchy_map": {
+        "subtitle": "broad→fine annotation tree",
+        "caption": "Broad-to-fine annotation hierarchy. Treemap where broad "
+                   "families contain their fine subpopulations and box size = "
+                   "number of reference cells; colours are the hierarchical "
+                   "palette and ⚠ marks families reported only at the family level "
+                   "(unresolved). Source: cell_type_counts.tsv + mapping + "
+                   "unresolved-family list.",
+        "how_to_read": "Large boxes are well-supported; ⚠ families should be read "
+                       "at the family level.",
+        "methodology": "Counts arranged as a broad→fine treemap.",
+    },
+    "marker_support_by_family": {
+        "subtitle": "subtype marker support",
+        "caption": "Subtype marker support within each broad family. Bars show the "
+                   "mean number of discriminating markers for within-family "
+                   "subtype pairs (x-axis) per family; the dashed line marks weak "
+                   "support. Source: pairwise_separability.tsv "
+                   "(n_discriminating_genes). Families below the line have weak "
+                   "subtype marker support.",
+        "how_to_read": "Families below the threshold cannot reliably separate "
+                       "their subtypes.",
+        "methodology": "Mean discriminating-gene count over within-family pairs.",
+    },
+    # ---- Resolution / spillover / unresolved (section 8) ----
+    "separability_distribution": {
+        "subtitle": "global separability histogram",
+        "caption": "Distribution of pairwise cell-type separability. Histogram of "
+                   "separability (x-axis = 1 − Bhattacharyya; y-axis = pair count) "
+                   "with a dashed high-risk threshold. Source: "
+                   "pairwise_separability.tsv. Mass below the threshold indicates "
+                   "many confusable pairs.",
+        "how_to_read": "A large left tail means many cell types are hard to "
+                       "separate.",
+        "methodology": "Histogram of all pairwise separability scores.",
+    },
+    "unresolved_mass_by_family": {
+        "subtitle": "mean unresolved mass",
+        "caption": "Unresolved mass by broad family. Bars show the mean "
+                   "RNA-derived mass not split into subtypes (x-axis) per family. "
+                   "Source: bulk_unresolved_family_mass.tsv. Higher values mean "
+                   "more mass stayed at the family level because subtypes were not "
+                   "separable.",
+        "how_to_read": "High-mass families should be interpreted at the family "
+                       "level.",
+        "methodology": "Per-sample unresolved mass averaged across samples.",
+    },
+    "trusted_resolution_summary": {
+        "subtitle": "recommended interpretation level",
+        "caption": "Recommended interpretation level by family. Bars rank each "
+                   "family's recommended resolution (1 = broad/family-level … "
+                   "4 = fine), coloured by level, combining within-family "
+                   "separability and unresolved-family status. Source: mapping + "
+                   "separability + unresolved list. Families marked "
+                   "broad/family-level should not be read as confident subtypes.",
+        "how_to_read": "Read each family at (or below) its recommended level.",
+        "methodology": "Worst within-family separability + unresolved status → "
+                       "recommended level.",
+    },
+    # ---- Benchmark (section 9) ----
+    "benchmark_method_status_summary": {
+        "subtitle": "tools by status",
+        "caption": "Benchmark method status. Bars count methods per status "
+                   "(executed / imported / exported-only / skipped / failed). "
+                   "Source: real_external_method_status.tsv. Only executed/"
+                   "imported tools carry measured metrics; the rest are listed but "
+                   "not scored.",
+        "how_to_read": "Check how many tools actually ran vs were skipped/failed.",
+        "methodology": "Counts of the benchmark status column.",
+    },
+    "bulk_accuracy_leaderboard": {
+        "subtitle": "measured bulk accuracy",
+        "caption": "Bulk benchmark accuracy. Bars show measured accuracy (x-axis) "
+                   "for executed/imported bulk methods only, against pseudobulk "
+                   "ground truth. Source: benchmark status/metrics. Spatial "
+                   "methods and skipped/failed tools are excluded (no comparable "
+                   "ground truth).",
+        "how_to_read": "Compare measured accuracy across methods; higher is "
+                       "better.",
+        "methodology": "Accuracy vs known pseudobulk proportions; executed/"
+                       "imported only.",
+    },
+    "runtime_comparison": {
+        "subtitle": "runtime (seconds)",
+        "caption": "Benchmark runtime. Bars show wall-clock runtime in seconds "
+                   "(x-axis) for executed/imported methods. Source: benchmark "
+                   "status runtime_seconds. Runtimes depend on this environment "
+                   "and settings (e.g. fast mode).",
+        "how_to_read": "Compare cost; very fast or very slow tools stand out.",
+        "methodology": "Recorded wall-clock time per executed/imported method.",
+    },
+    "composite_scorecard": {
+        "subtitle": "weighted scorecard (NOT accuracy)",
+        "caption": "Composite benchmark scorecard. Stacked bars show each scored "
+                   "method's weighted contribution per dimension (accuracy, "
+                   "robustness, usability, interpretability, resolution-awareness, "
+                   "runtime). Source: composite_scores.tsv. This is a weighted "
+                   "scorecard, NOT an objective accuracy measure; bulk and spatial "
+                   "are scored separately.",
+        "how_to_read": "Use as a multi-criteria summary, not a single accuracy "
+                       "ranking.",
+        "methodology": "Weighted sum of per-dimension scores (see composite-score "
+                       "weights).",
+    },
     "bulk_composition_clustered_barplot": {
         "subtitle": "bulk composition by sample",
         "caption": "Bulk RNA-derived composition by sample. Each stacked bar is "
@@ -1323,6 +1714,10 @@ def main(argv: list[str] | None = None) -> int:
         generated.append(spatial_path)
     generated.append(generate_combined_report())
     _write_report_bundle_artifacts(bulk_warns, spatial_warns, bulk_meta, spatial_meta)
+    # New informative QC / signature / resolution / benchmark figures.
+    missing_figs = generate_diagnostic_figures(ref)
+    missing_figs += generate_benchmark_figures()
+    H.write_json(missing_figs, H.OUT_SUMMARY_DIR / "missing_figures.json")
     unified = generate_unified_report()
     generated.append(unified)
     _write_output_index()

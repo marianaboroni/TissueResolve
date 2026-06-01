@@ -17,9 +17,14 @@ __all__ = ["FigureRecord", "FigureManifest"]
 
 MANIFEST_COLUMNS = [
     "figure_id", "section", "title", "html_path", "png_path", "svg_path",
-    "pdf_path", "source_data_path", "caption_path", "methodology",
-    "variables_defined", "status",
+    "pdf_path", "source_data_path", "caption_path", "caption", "methodology",
+    "variables_defined", "status", "reason_if_missing",
 ]
+
+# status vocabulary used by the report harness
+STATUS_GENERATED = "generated"
+STATUS_MISSING_DATA = "missing_data"
+STATUS_SKIPPED = "skipped"
 
 
 @dataclass
@@ -33,9 +38,11 @@ class FigureRecord:
     pdf_path: str = ""
     source_data_path: str = ""
     caption_path: str = ""
+    caption: str = ""
     methodology: str = ""
     variables_defined: str = ""
-    status: str = "ok"
+    status: str = "generated"
+    reason_if_missing: str = ""
 
     def row(self) -> dict:
         return {c: getattr(self, c) for c in MANIFEST_COLUMNS}

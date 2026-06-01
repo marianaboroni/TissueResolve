@@ -100,10 +100,21 @@ def test_figure_manifest_columns_and_save(tmp_path):
     assert p.exists()
     df = pd.read_csv(p, sep="\t")
     for col in ("figure_id", "section", "title", "html_path", "png_path", "svg_path",
-                "pdf_path", "source_data_path", "caption_path", "methodology",
-                "variables_defined", "status"):
+                "pdf_path", "source_data_path", "caption_path", "caption",
+                "methodology", "variables_defined", "status", "reason_if_missing"):
         assert col in df.columns
     assert df.loc[0, "figure_id"] == "f1"
+
+
+def test_figure_manifest_records_missing_data(tmp_path):
+    m = FigureManifest()
+    m.add(FigureRecord("missing_fig", "bulk", "Solver CV",
+                       status="missing_data",
+                       reason_if_missing="solver=auto CV scores not saved"))
+    df = pd.read_csv(m.save(tmp_path / "figures"), sep="\t")
+    row = df[df["figure_id"] == "missing_fig"].iloc[0]
+    assert row["status"] == "missing_data"
+    assert "not saved" in str(row["reason_if_missing"])
 
 
 # --- unified report ----------------------------------------------------------

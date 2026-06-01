@@ -33,6 +33,7 @@ __all__ = [
     "build_hierarchical_color_map",
     "save_hierarchical_color_map",
     "load_hierarchical_color_map",
+    "color_dicts_from_map",
 ]
 
 # Deterministic qualitative base palette for families with no known ramp.
@@ -375,3 +376,28 @@ def save_hierarchical_color_map(
 def load_hierarchical_color_map(path) -> pd.DataFrame:
     """Load a colour map saved by :func:`save_hierarchical_color_map` (TSV)."""
     return pd.read_csv(Path(path), sep="\t").fillna("")
+
+
+def color_dicts_from_map(color_map: pd.DataFrame) -> tuple[dict[str, str], dict[str, str]]:
+    """Split a hierarchical colour-map frame into ``(fine→hex, broad→hex)`` dicts.
+
+    Convenience for plotting code that needs to colour either fine cell types or
+    broad families from the single deterministic map.  Fine/special rows
+    (``color_role`` in ``fine/other/unresolved``) populate the fine dict keyed by
+    ``fine_cell_type``; broad rows populate the broad dict keyed by
+    ``broad_cell_type``.
+    """
+    fine: dict[str, str] = {}
+    broad: dict[str, str] = {}
+    for _, r in color_map.iterrows():
+        role = str(r.get("color_role", ""))
+        hexc = str(r["color_hex"])
+        ft = str(r.get("fine_cell_type", "") or "")
+        bt = str(r.get("broad_cell_type", "") or "")
+        if role == "broad":
+            if bt:
+                broad[bt] = hexc
+        else:
+            if ft:
+                fine[ft] = hexc
+    return fine, broad
