@@ -59,10 +59,27 @@ def _r_pkg_installed(pkg: str) -> bool:
         return False
 
 
-def _invoke(kind: str, script: str, fast: bool) -> dict:
-    """Run an external runner script; capture status (never raises)."""
+def _py_for(script: str) -> str:
+    """Use the separate cell2location venv interpreter when present."""
+    if "cell2location" in script:
+        c2l = REPO / "benchmarks" / "envs" / "c2l_venv" / "bin" / "python"
+        if c2l.exists():
+            return str(c2l)
+    return sys.executable
+
+
+def _invoke(kind: str, script: str, fast: bool, *, name: str = "",
+            modality: str = "bulk", use_cached: bool = True) -> dict:
+    """Run an external runner script; capture status (never raises).
+
+    When *use_cached* and a prediction already exists for *name*, the (possibly
+    slow) tool is not re-run — its existing executed result is reused."""
+    if use_cached and name:
+        pred = OUTPUTS_DIR / modality / "predictions" / f"{name}.tsv"
+        if pred.exists():
+            return {"status": "cached", "note": f"reusing existing {pred}"}
     cmd = (["Rscript", script] if kind == "R"
-           else [sys.executable, script] + (["--fast"] if fast else []))
+           else [_py_for(script), script] + (["--fast"] if fast else []))
     if kind == "R" and not _r_available():
         return {"status": "skipped", "error": "Rscript not available"}
     try:
@@ -180,7 +197,7 @@ def main(argv=None) -> int:
         for name, (kind, script) in BULK_EXTERNAL.items():
             if methods_filter and name not in methods_filter:
                 continue
-            inv = _invoke(kind, script, args.fast)
+            inv = _invoke(kind, script, args.fast, name=name, modality="bulk")
             print(f"  [bulk] {name}: {inv['status']}")
         meta = _read_metadata("bulk")
         meta_by = {r["method"]: r for _, r in meta.iterrows()} if not meta.empty else {}
@@ -223,7 +240,7 @@ def main(argv=None) -> int:
     # --- spatial ---
     if args.run_spatial or args.run_all:
         for name, (kind, script) in SPATIAL_EXTERNAL.items():
-            inv = _invoke(kind, script, args.fast)
+            inv = _invoke(kind, script, args.fast, name=name, modality="spatial")
             print(f"  [spatial] {name}: {inv['status']}")
         meta = _read_metadata("spatial")
         if not meta.empty:

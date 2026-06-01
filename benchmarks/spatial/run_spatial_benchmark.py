@@ -105,8 +105,14 @@ def main(argv=None) -> int:
 
     methods = spatial_methods(include_external=not args.no_external)
     if args.include_imported:
-        from benchmarks.shared.imported import discover_imported
-        methods += discover_imported("spatial")
+        from benchmarks.shared.imported import (
+            discover_imported, discover_executed_external)
+        executed_ext = discover_executed_external("spatial")
+        imported_ext = discover_imported("spatial")
+        ext_names = {m.name for m in executed_ext + imported_ext}
+        methods = [m for m in methods if not (
+            getattr(m, "external", False) and m.name in ext_names)]
+        methods += executed_ext + imported_ext
 
     if args.dry_run:
         print("Spatial benchmark plan (dry run):")

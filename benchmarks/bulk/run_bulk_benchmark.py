@@ -108,10 +108,18 @@ def main(argv=None) -> int:
     if args.include_imported:
         from benchmarks.shared.imported import (
             discover_imported, discover_executed_external)
-        # locally-executed external tools (e.g. BisqueRNA via run_bisque.R) +
-        # results imported from elsewhere
-        methods += discover_executed_external("bulk")
-        methods += discover_imported("bulk")
+        # locally-executed external tools (e.g. BisqueRNA/MuSiC via their R
+        # runners) + results imported from elsewhere
+        executed_ext = discover_executed_external("bulk")
+        imported_ext = discover_imported("bulk")
+        # drop registry external stubs superseded by an executed/imported tool
+        # (match by name or known alias, e.g. registry "Bisque" -> "BisqueRNA")
+        ext_names = {m.name for m in executed_ext + imported_ext}
+        alias = {"Bisque": "BisqueRNA"}
+        methods = [m for m in methods if not (
+            getattr(m, "external", False)
+            and (m.name in ext_names or alias.get(m.name) in ext_names))]
+        methods += executed_ext + imported_ext
 
     if args.dry_run:
         print("Bulk benchmark plan (dry run):")

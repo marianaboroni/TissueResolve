@@ -204,3 +204,42 @@ def test_bisque_runner_skips_without_package():
     txt = r.read_text()
     # graceful-fail contract present
     assert "skipped" in txt and "ReferenceBasedDecomposition" in txt
+
+
+# --- metrics: dominant accuracy + family aggregation with partial mapping ----
+
+def test_dominant_accuracy_metric():
+    true = pd.DataFrame({"A": [0.7, 0.1], "B": [0.3, 0.9]}, index=["s0", "s1"])
+    est = pd.DataFrame({"A": [0.6, 0.2], "B": [0.4, 0.8]}, index=["s0", "s1"])
+    from benchmarks.shared import metrics as M
+    assert M.dominant_accuracy(true, est) == pytest.approx(1.0)
+
+
+def test_family_metrics_with_unmapped_truth_columns():
+    """Ground-truth columns not in the mapping fall back to themselves and are
+    dropped on alignment (no crash)."""
+    from benchmarks.shared import metrics as M
+    mp = {"A": "F", "B": "F"}                       # 'C' (truth-only) unmapped
+    true = pd.DataFrame({"A": [0.3], "B": [0.2], "C": [0.5]})
+    est = pd.DataFrame({"A": [0.4], "B": [0.6]})    # method has no 'C'
+    fam = M.family_level_metrics(true, est, mp)
+    assert "pearson" in fam
+
+
+def test_executed_external_prediction_enters_metrics(tmp_path, monkeypatch):
+    """When an executed external prediction file exists, it is discovered and
+    its predictions are usable for metric computation."""
+    import benchmarks.shared.io as IO
+    import benchmarks.shared.imported as IM
+    from benchmarks.shared import metrics as M
+    monkeypatch.setattr(IO, "OUTPUTS_DIR", tmp_path)
+    monkeypatch.setattr(IM, "OUTPUTS_DIR", tmp_path)
+    pred = tmp_path / "bulk" / "predictions"; pred.mkdir(parents=True)
+    meta = tmp_path / "bulk" / "method_metadata"; meta.mkdir(parents=True)
+    truth = pd.DataFrame({"A": [0.6, 0.4], "B": [0.4, 0.6]}, index=["s0", "s1"])
+    truth.to_csv(pred / "ExtTool.tsv", sep="\t")
+    (meta / "ExtTool.json").write_text(json.dumps({"executed": True, "status": "executed"}))
+    found = IM.discover_executed_external("bulk")
+    res = found[0].run({})
+    m = M.accuracy_metrics(truth, res.predictions)
+    assert m["pearson"] == pytest.approx(1.0)

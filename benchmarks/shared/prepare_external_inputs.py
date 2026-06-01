@@ -90,6 +90,50 @@ def _export_single_cell_reference(h5ad_path, ref_genes, cell_types, out_dir, *,
             "subject_column": subj_col, "n_subjects": int(meta["SubjectName"].nunique())}
 
 
+def _export_spatial_real(h5ad_path, ref_genes, out_dir, *, max_spots: int = 600,
+                         seed: int = 0) -> dict:
+    """Export subsampled Visium counts (genes×spots) + coordinates for spatial
+    external tools (CARD/SPOTlight), restricted to reference genes (symbols)."""
+    import anndata as ad
+    import scipy.sparse as sp
+    adata = ad.read_h5ad(h5ad_path)
+    # map var to symbols matching the reference
+    ref_set = set(map(str, ref_genes))
+    genes = list(map(str, adata.var_names))
+    best = len(set(genes) & ref_set)
+    for col in adata.var.columns:
+        vals = list(map(str, adata.var[col]))
+        ov = len(set(vals) & ref_set)
+        if ov > best:
+            best, genes = ov, vals
+    adata.var_names = genes
+    keep_genes = [g for g in adata.var_names if g in ref_set]
+    adata = adata[:, [g in ref_set for g in adata.var_names]]
+    n = adata.n_obs
+    rng = np.random.default_rng(seed)
+    if n > max_spots:
+        idx = np.sort(rng.choice(n, size=max_spots, replace=False))
+        adata = adata[idx].copy()
+    X = adata.X.toarray() if sp.issparse(adata.X) else np.asarray(adata.X)
+    spots = [f"spot{i}" for i in range(X.shape[0])]
+    gxs = pd.DataFrame(X.T, index=list(adata.var_names), columns=spots)  # genes × spots
+    gxs.to_csv(out_dir / "spatial_counts_genes_by_spots.tsv", sep="\t")
+    obs = adata.obs
+    if {"array_row", "array_col"} <= set(obs.columns):
+        coords = pd.DataFrame({"x": obs["array_col"].to_numpy(),
+                               "y": obs["array_row"].to_numpy()}, index=spots)
+    elif "spatial" in (adata.obsm or {}):
+        xy = np.asarray(adata.obsm["spatial"])
+        coords = pd.DataFrame({"x": xy[:, 0], "y": xy[:, 1]}, index=spots)
+    else:
+        coords = pd.DataFrame({"x": range(len(spots)), "y": 0}, index=spots)
+    coords.to_csv(out_dir / "spatial_coordinates.tsv", sep="\t")
+    meta = pd.DataFrame({"spot_id": spots}); meta.to_csv(
+        out_dir / "spatial_metadata.tsv", sep="\t", index=False)
+    return {"exported": True, "n_spots": int(X.shape[0]),
+            "n_genes": len(keep_genes), "max_spots": max_spots}
+
+
 def prepare_inputs(*, use_existing_real_data: bool = True, toy: bool = False) -> dict:
     """Write harmonised inputs; return a dict of written paths + summaries."""
     ref_dir = PREP / "reference"; bulk_dir = PREP / "bulk"; sp_dir = PREP / "spatial"
@@ -168,12 +212,22 @@ def prepare_inputs(*, use_existing_real_data: bool = True, toy: bool = False) ->
     (sp_dir / "spatial_h5ad_path.txt").write_text(spatial_h5ad, encoding="utf-8")
     if sc is not None:
         Y = np.asarray(sc["Y"]); spots = sc["spot_ids"]; genes = sc["gene_names"]
-        write_tsv(pd.DataFrame(Y, index=spots, columns=genes),
-                  sp_dir / "spatial_counts_spots_by_genes.tsv")
+        sxg = pd.DataFrame(Y, index=spots, columns=genes)
+        write_tsv(sxg, sp_dir / "spatial_counts_spots_by_genes.tsv")
+        write_tsv(sxg.T, sp_dir / "spatial_counts_genes_by_spots.tsv")
         write_tsv(pd.DataFrame({"array_row": sc["array_row"], "array_col": sc["array_col"]},
                                index=spots), sp_dir / "spatial_coordinates.tsv")
         if sp_truth is not None:
             write_tsv(sp_truth, sp_dir / "spatial_truth_if_synthetic.tsv")
+    elif use_existing_real_data and spatial_h5ad and Path(spatial_h5ad).exists():
+        try:
+            sp_info = _export_spatial_real(spatial_h5ad, ref_genes=list(ref.gene_names),
+                                           out_dir=sp_dir, max_spots=600, seed=0)
+            written["spatial_counts_genes_by_spots"] = sp_dir / "spatial_counts_genes_by_spots.tsv"
+        except Exception as exc:  # noqa: BLE001
+            sp_info = {"exported": False, "error": str(exc)}
+    else:
+        sp_info = {"exported": False}
 
     # summaries
     summaries = {

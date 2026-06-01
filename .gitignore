@@ -47,3 +47,4 @@ __pycache__/
 demo_demo/
 demo_wiz/
 data/
+benchmarks/envs/c2l_venv/
