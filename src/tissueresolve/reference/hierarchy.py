@@ -679,6 +679,7 @@ def evaluate_within_family_resolvability(
     unresolved_threshold: float = 0.10,
     min_discriminating_genes: int = 10,
     within_family_spillover_threshold: float = 0.30,
+    family_gene_panels: Optional[dict[str, list[str]]] = None,
 ) -> pd.DataFrame:
     """Score how separable the fine subtypes are *within* each broad family.
 
@@ -715,6 +716,7 @@ def evaluate_within_family_resolvability(
         if len(members) <= 1:
             rows[fam] = {
                 "n_subtypes": len(members),
+                "n_panel_genes": len(fine_ref.gene_names),
                 "mean_separability": float("nan"),
                 "min_discriminating_genes": -1,
                 "mean_spillover": float("nan"),
@@ -722,16 +724,28 @@ def evaluate_within_family_resolvability(
                 "reason": "single subtype (fine == family)",
             }
             continue
-        sub = fine_ref.subset_genes(list(fine_ref.gene_names))  # cheap copy
-        # subset to family members by rebuilding a small reference view
-        idx = [cell_types.index(m) for m in members]
+        # When a family-specific gene panel is supplied, restrict the reference
+        # to that panel BEFORE computing separability — so within-family
+        # resolvability is judged on genes selected to separate the subtypes,
+        # not the global (broad-family) panel.  Default (no panel) keeps the
+        # original global-gene behaviour.
+        ref_g = fine_ref
+        n_panel = len(fine_ref.gene_names)
+        if family_gene_panels:
+            panel = [g for g in (family_gene_panels.get(fam) or [])
+                     if g in set(fine_ref.gene_names)]
+            if len(panel) >= 2:
+                ref_g = fine_ref.subset_genes(panel)
+                n_panel = len(panel)
+        g_cell_types = [str(c) for c in ref_g.cell_types]
+        idx = [g_cell_types.index(m) for m in members]
         sub_ref = ReferenceSignature(
-            gene_names=list(fine_ref.gene_names),
+            gene_names=list(ref_g.gene_names),
             cell_types=members,
-            R_cpm=(fine_ref.as_R_cpm()[idx]).astype(np.float32),
-            R_log=(fine_ref.as_R_log()[idx]).astype(np.float32),
-            phi=(fine_ref.as_phi()[:, idx]) if fine_ref.phi is not None else None,
-            phi_g=fine_ref.phi_g,
+            R_cpm=(ref_g.as_R_cpm()[idx]).astype(np.float32),
+            R_log=(ref_g.as_R_log()[idx]).astype(np.float32),
+            phi=(ref_g.as_phi()[:, idx]) if ref_g.phi is not None else None,
+            phi_g=ref_g.phi_g,
             n_cells_per_type={m: fine_ref.n_cells_per_type.get(m, 0) for m in members},
             genome=fine_ref.genome,
         )
@@ -760,21 +774,28 @@ def evaluate_within_family_resolvability(
         resolvable = not reasons
         rows[fam] = {
             "n_subtypes": len(members),
+            "n_panel_genes": n_panel,
             "mean_separability": round(mean_sep, 4),
             "min_discriminating_genes": min_disc,
             "mean_spillover": round(mean_spill, 4),
             "resolvable": resolvable,
             "reason": "resolvable" if resolvable else "; ".join(reasons),
         }
-    return pd.DataFrame(rows).T.reindex(
-        columns=["n_subtypes", "mean_separability", "min_discriminating_genes",
-                 "mean_spillover", "resolvable", "reason"]
+    out = pd.DataFrame(rows).T
+    # single-subtype rows lack n_panel_genes; fill for a stable schema
+    if "n_panel_genes" not in out.columns:
+        out["n_panel_genes"] = len(fine_ref.gene_names)
+    return out.reindex(
+        columns=["n_subtypes", "n_panel_genes", "mean_separability",
+                 "min_discriminating_genes", "mean_spillover", "resolvable",
+                 "reason"]
     )
 
 
 def compute_within_family_subtype_confidence(
     fine_ref: ReferenceSignature, mapping: dict[str, str],
     *, min_discriminating_genes: int = 10,
+    family_gene_panels: Optional[dict[str, list[str]]] = None,
 ) -> dict[str, dict[str, Any]]:
     """Per-subtype confidence *within* its family.
 
@@ -782,6 +803,9 @@ def compute_within_family_subtype_confidence(
     sibling (high ``1 − BC`` and enough discriminating genes).  Returns
     ``{subtype: {"confidence": float, "min_disc_genes": int, "family": str}}``.
     Singletons get confidence 1.0 (fine == family).
+
+    When *family_gene_panels* is supplied, separability is computed on each
+    family's own gene panel (default ``None`` = global genes, unchanged).
     """
     from tissueresolve.reference.separability import compute_separability
 
@@ -795,13 +819,20 @@ def compute_within_family_subtype_confidence(
         if len(members) == 1:
             out[members[0]] = {"confidence": 1.0, "min_disc_genes": -1, "family": fam}
             continue
-        idx = [cell_types.index(m) for m in members]
+        ref_g = fine_ref
+        if family_gene_panels:
+            panel = [g for g in (family_gene_panels.get(fam) or [])
+                     if g in set(fine_ref.gene_names)]
+            if len(panel) >= 2:
+                ref_g = fine_ref.subset_genes(panel)
+        g_cell_types = [str(c) for c in ref_g.cell_types]
+        idx = [g_cell_types.index(m) for m in members]
         sub_ref = ReferenceSignature(
-            gene_names=list(fine_ref.gene_names), cell_types=members,
-            R_cpm=(fine_ref.as_R_cpm()[idx]).astype(np.float32),
-            R_log=(fine_ref.as_R_log()[idx]).astype(np.float32),
-            phi=(fine_ref.as_phi()[:, idx]) if fine_ref.phi is not None else None,
-            phi_g=fine_ref.phi_g, genome=fine_ref.genome,
+            gene_names=list(ref_g.gene_names), cell_types=members,
+            R_cpm=(ref_g.as_R_cpm()[idx]).astype(np.float32),
+            R_log=(ref_g.as_R_log()[idx]).astype(np.float32),
+            phi=(ref_g.as_phi()[:, idx]) if ref_g.phi is not None else None,
+            phi_g=ref_g.phi_g, genome=fine_ref.genome,
             n_cells_per_type={m: fine_ref.n_cells_per_type.get(m, 0) for m in members})
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
@@ -899,6 +930,7 @@ def assemble_hierarchical_estimates(
     within_family_spillover_threshold: float = 0.30,
     allow_partial_resolution: bool = True,
     subtype_confidence_threshold: float = 0.10,
+    family_gene_panels: Optional[dict[str, list[str]]] = None,
     extra_metadata: Optional[dict] = None,
 ) -> HierarchicalEstimates:
     """Combine broad + fine estimates into the final hierarchical result.
@@ -912,6 +944,12 @@ def assemble_hierarchical_estimates(
     4. combines into absolute subtype proportions ``family × conditional``,
     5. moves unresolved families' mass into ``unresolved_<family>`` columns.
 
+    When *family_gene_panels* (``{family: [genes]}``) is supplied, within-family
+    resolvability and subtype confidence are judged on each family's own gene
+    panel rather than the global panel — so families that the global signature
+    could not sub-resolve may become resolvable.  Default (``None``) preserves
+    the original global-gene behaviour exactly.
+
     The deconvolution itself is done by the caller (bulk or spatial pipeline);
     this function performs only the (modality-agnostic) hierarchy arithmetic
     and gating, so the core solvers are never modified.
@@ -921,6 +959,7 @@ def assemble_hierarchical_estimates(
         unresolved_threshold=unresolved_threshold,
         min_discriminating_genes=min_discriminating_genes,
         within_family_spillover_threshold=within_family_spillover_threshold,
+        family_gene_panels=family_gene_panels,
     )
     conditional = compute_conditional_subtype_proportions(
         fine_props, family_props, mapping)
@@ -930,7 +969,8 @@ def assemble_hierarchical_estimates(
     if allow_partial_resolution and allow_unresolved:
         # Per-subtype: keep confident subtype mass, residual → unresolved_<family>.
         confidence = compute_within_family_subtype_confidence(
-            fine_ref, mapping, min_discriminating_genes=min_discriminating_genes)
+            fine_ref, mapping, min_discriminating_genes=min_discriminating_genes,
+            family_gene_panels=family_gene_panels)
         resolved_fine = pd.DataFrame(0.0, index=family_props.index, columns=subtypes)
         residuals = {}
         for fam in family_props.columns:

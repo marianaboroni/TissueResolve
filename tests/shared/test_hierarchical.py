@@ -212,6 +212,81 @@ def test_no_unresolved_when_disallowed(hier_ref):
 
 
 # ---------------------------------------------------------------------------
+# Within-family gene panels (additive; default behaviour unchanged)
+# ---------------------------------------------------------------------------
+
+def test_family_panel_changes_separability(hier_ref):
+    """The resolvability call must actually USE the family panel: restricting
+    FamX to flat (non-discriminating) genes makes it unresolvable, while the
+    discriminating panel keeps it resolvable."""
+    from tissueresolve.reference.hierarchy import evaluate_within_family_resolvability
+    genes = [str(g) for g in hier_ref.gene_names]
+    flat_panel = {"FamX": genes[80:120]}        # all flat (value 2.0) → not separable
+    disc_panel = {"FamX": genes[0:40]}          # the X_sub1/X_sub2 discriminating block
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res_flat = evaluate_within_family_resolvability(
+            hier_ref, FAMILY_MAP, min_discriminating_genes=5,
+            family_gene_panels=flat_panel)
+        res_disc = evaluate_within_family_resolvability(
+            hier_ref, FAMILY_MAP, min_discriminating_genes=5,
+            family_gene_panels=disc_panel)
+    assert bool(res_flat.loc["FamX", "resolvable"]) is False   # flat panel kills it
+    assert bool(res_disc.loc["FamX", "resolvable"]) is True    # discriminating panel keeps it
+    assert int(res_disc.loc["FamX", "n_panel_genes"]) == 40
+
+
+def test_default_behaviour_unchanged_without_panels(hier_ref):
+    """No panels → identical verdict to the original global-gene path."""
+    from tissueresolve.reference.hierarchy import evaluate_within_family_resolvability
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        a = evaluate_within_family_resolvability(hier_ref, FAMILY_MAP,
+                                                 min_discriminating_genes=5)
+        b = evaluate_within_family_resolvability(hier_ref, FAMILY_MAP,
+                                                 min_discriminating_genes=5,
+                                                 family_gene_panels=None)
+    assert a.drop(columns=["n_panel_genes"]).equals(b.drop(columns=["n_panel_genes"]))
+
+
+def test_run_hierarchical_bulk_accepts_family_panels(hier_ref):
+    """The bulk hierarchical entry point threads family_gene_panels without error
+    and records it in metadata."""
+    from tissueresolve.bulk.hierarchical import run_hierarchical_bulk
+    # tiny pseudobulk from the reference profiles (samples × genes)
+    R = hier_ref.as_R_cpm()
+    samples = pd.DataFrame(
+        {f"s{i}": R[i % R.shape[0]] for i in range(3)},
+        index=hier_ref.gene_names).T
+    genes = [str(g) for g in hier_ref.gene_names]
+    panels = {"FamX": genes[0:40], "FamY": genes[40:60]}
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        res = run_hierarchical_bulk(samples.T, hier_ref, FAMILY_MAP,
+                                    family_gene_panels=panels,
+                                    min_discriminating_genes=5)
+    assert res.estimates.metadata.get("within_family_panels") is True
+    # combined fine proportions still sum to ~1 per sample (mass preserved)
+    s = res.estimates.combined_fine.sum(axis=1)
+    assert np.allclose(s.to_numpy(), 1.0, atol=1e-6)
+
+
+def test_within_family_resolution_summary(hier_ref):
+    from tissueresolve.reference.within_family_markers import (
+        within_family_resolution_summary)
+    genes = [str(g) for g in hier_ref.gene_names]
+    panels = {"FamX": genes[0:40], "FamY": genes[40:60]}
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        glob, within, summary = within_family_resolution_summary(
+            hier_ref, FAMILY_MAP, panels, min_discriminating_genes=5)
+    assert {"family", "global_mean_separability",
+            "within_family_mean_separability", "global_resolvable",
+            "within_family_resolvable", "separability_improved",
+            "verdict_changed"} <= set(summary.columns)
+
+
+# ---------------------------------------------------------------------------
 # Annotation detection & validation
 # ---------------------------------------------------------------------------
 

@@ -86,6 +86,7 @@ def run_hierarchical_bulk(
     within_family_spillover_threshold: float = 0.30,
     allow_partial_resolution: bool = True,
     subtype_confidence_threshold: float = 0.10,
+    family_gene_panels: Optional[dict[str, list[str]]] = None,
     **run_kwargs,
 ) -> HierarchicalBulkResult:
     """Run broad-to-fine hierarchical bulk deconvolution.
@@ -135,7 +136,9 @@ def run_hierarchical_bulk(
         within_family_spillover_threshold=within_family_spillover_threshold,
         allow_partial_resolution=allow_partial_resolution,
         subtype_confidence_threshold=subtype_confidence_threshold,
-        extra_metadata={"modality": "bulk"},
+        family_gene_panels=family_gene_panels,
+        extra_metadata={"modality": "bulk",
+                        "within_family_panels": bool(family_gene_panels)},
     )
 
     run_metadata = {
