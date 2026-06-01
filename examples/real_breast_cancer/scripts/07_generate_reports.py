@@ -37,6 +37,11 @@ import pandas as pd
 import _harness as H
 
 
+# Composite multi-panel "main summary" figures are kept OUT of the primary
+# figure grid and shown only in a collapsible technical appendix.
+_SUMMARY_FIGS = {"bulk_main_summary_figure", "spatial_main_summary_figure"}
+
+
 def _read_tsv(p: Path):
     try:
         return pd.read_csv(p, sep="\t", comment="#", index_col=0)
@@ -695,8 +700,14 @@ def _caption_for(stem: str, section: str, captions: dict) -> dict:
     }
 
 
-def _figure_cards(fig_dir, out_dir, manifest, section, captions):
-    """Build figure cards for every figure HTML in *fig_dir*, register in manifest."""
+def _figure_cards(fig_dir, out_dir, manifest, section, captions,
+                  *, exclude=None, only=None):
+    """Build figure cards for figure HTML in *fig_dir*, register in manifest.
+
+    *exclude*: iterable of figure stems to skip (e.g. composite "main summary"
+    figures kept out of the primary grid).  *only*: if given, render ONLY these
+    stems (used for the technical-diagnostics appendix).
+    """
     from tissueresolve.report import components as C
     from tissueresolve.report.figures import FigureRecord
     import os
@@ -704,9 +715,15 @@ def _figure_cards(fig_dir, out_dir, manifest, section, captions):
     fig_dir = _P(fig_dir)
     if not fig_dir.exists():
         return ""
+    exclude = set(exclude or [])
+    only = set(only) if only is not None else None
     rel = lambda p: os.path.relpath(p, out_dir)  # noqa: E731
     cards = []
     for fh in sorted(fig_dir.glob("*.html")):
+        if fh.stem in exclude:
+            continue
+        if only is not None and fh.stem not in only:
+            continue
         stem = fh.stem
         cap = _caption_for(stem, section, captions)
         data = fh.with_suffix(".data.tsv")
@@ -841,36 +858,93 @@ def generate_diagnostic_figures(ref) -> list[dict]:
 
 
 def generate_benchmark_figures() -> list[dict]:
-    """Generate benchmark figures from the benchmark harness TSVs (if present)."""
+    """Generate **separate** bulk / spatial / scorecard benchmark figures.
+
+    Bulk methods (pseudobulk ground truth) get accuracy figures; spatial methods
+    (no ground truth) get concordance/structure figures; the composite scorecard
+    is kept in its own section.  Figures are written into separate dirs so the
+    report renders three independent subsections — bulk and spatial are never
+    pooled into one accuracy leaderboard.
+    """
     missing: list[dict] = []
     bench_out = H.HARNESS_DIR.parent.parent / "benchmarks" / "outputs"
-    fig_dir = H.OUTPUTS_DIR / "benchmark" / "figures"
+    bulk_fig = H.OUTPUTS_DIR / "benchmark" / "bulk" / "figures"
+    spat_fig = H.OUTPUTS_DIR / "benchmark" / "spatial" / "figures"
+    score_fig = H.OUTPUTS_DIR / "benchmark" / "scorecard" / "figures"
     status_p = bench_out / "real_external_method_status.tsv"
     comp_p = bench_out / "composite_scores.tsv"
     if not status_p.exists() and not comp_p.exists():
-        return [{"figure_id": "benchmark_figures", "section": "benchmark",
+        return [{"figure_id": "benchmark_figures", "section": "bulk_benchmark",
                  "reason": "no benchmark outputs found (run benchmarks/ first)"}]
+    from tissueresolve.plotting import bulk_benchmark_plots as BB
+    from tissueresolve.plotting import spatial_benchmark_plots as SB
     from tissueresolve.plotting import benchmark_report_plots as BP
 
-    def _safe(fig_id, fn):
+    def _safe(fig_id, section, fn):
         try:
             fn()
         except Exception as exc:
-            missing.append({"figure_id": fig_id, "section": "benchmark",
+            missing.append({"figure_id": fig_id, "section": section,
                             "reason": str(exc)[:300]})
 
     status = _read_tsv_plain(status_p)
     comp = _read_tsv_plain(comp_p)
     if status is not None:
-        _safe("benchmark_method_status_summary",
-              lambda: BP.plot_benchmark_method_status(status, fig_dir))
-        _safe("bulk_accuracy_leaderboard",
-              lambda: BP.plot_bulk_accuracy_leaderboard(status, fig_dir))
-        _safe("runtime_comparison",
-              lambda: BP.plot_runtime_comparison(status, fig_dir))
+        # Bulk benchmark (accuracy — ground truth available)
+        _safe("bulk_method_status_summary", "bulk_benchmark",
+              lambda: BB.plot_bulk_method_status_summary(status, bulk_fig))
+        _safe("bulk_fine_accuracy_leaderboard", "bulk_benchmark",
+              lambda: BB.plot_bulk_fine_accuracy_leaderboard(status, bulk_fig))
+        _safe("bulk_runtime_comparison", "bulk_benchmark",
+              lambda: BB.plot_bulk_runtime_comparison(status, bulk_fig))
+        # bulk fine/family accuracy + RMSE/MAE from saved metrics if present
+        fam_m = _read_tsv_plain(bench_out / "bulk" / "family_level_metrics.tsv")
+        if fam_m is not None and "family_accuracy" in (fam_m.columns if fam_m is not None else []):
+            _safe("bulk_family_accuracy_leaderboard", "bulk_benchmark",
+                  lambda: BB.plot_bulk_family_accuracy_leaderboard(fam_m, bulk_fig))
+        else:
+            missing.append({"figure_id": "bulk_family_accuracy_leaderboard",
+                            "section": "bulk_benchmark",
+                            "reason": "no family-level accuracy column in benchmark metrics"})
+        acc_m = _read_tsv_plain(bench_out / "bulk" / "accuracy_metrics.tsv")
+        if acc_m is not None and ({"rmse", "mae"} & set(acc_m.columns)):
+            _safe("bulk_rmse_mae_comparison", "bulk_benchmark",
+                  lambda: BB.plot_bulk_rmse_mae_comparison(acc_m, bulk_fig))
+        else:
+            missing.append({"figure_id": "bulk_rmse_mae_comparison",
+                            "section": "bulk_benchmark",
+                            "reason": "no rmse/mae columns in benchmark metrics"})
+
+        # Spatial benchmark (concordance/structure — NO ground truth)
+        _safe("spatial_method_status_summary", "spatial_benchmark",
+              lambda: SB.plot_spatial_method_status_summary(status, spat_fig))
+        _safe("spatial_runtime_comparison", "spatial_benchmark",
+              lambda: SB.plot_spatial_runtime_comparison(status, spat_fig))
+        _safe("spatial_output_completeness_summary", "spatial_benchmark",
+              lambda: SB.plot_spatial_output_completeness_summary(status, spat_fig))
+        # structure metrics from the spatial outputs (Moran's I)
+        morans = _read_tsv_plain(H.OUT_SPATIAL_DIR / "morans_i.tsv")
+        if morans is not None and "morans_i" in morans.columns:
+            label = morans.columns[0]
+            sm = morans.rename(columns={label: "population"}).assign(metric="morans_i")
+            sm = sm.rename(columns={"morans_i": "value"})[["population", "metric", "value"]]
+            _safe("spatial_structure_metrics_summary", "spatial_benchmark",
+                  lambda: SB.plot_spatial_structure_metrics_summary(sm, spat_fig))
+        else:
+            missing.append({"figure_id": "spatial_structure_metrics_summary",
+                            "section": "spatial_benchmark",
+                            "reason": "no spatial structure metrics (morans_i) available"})
+        # concordance needs >=2 executed/imported spatial methods with predictions
+        missing.append({"figure_id": "spatial_concordance_heatmap",
+                        "section": "spatial_benchmark",
+                        "reason": "needs >=2 executed/imported spatial methods with "
+                                  "per-spot predictions (concordance not computed)"})
     if comp is not None:
-        _safe("composite_scorecard",
-              lambda: BP.plot_composite_scorecard(comp, fig_dir))
+        _safe("composite_scorecard", "benchmark_scorecard",
+              lambda: BP.plot_composite_scorecard(comp, score_fig))
+        _safe("benchmark_method_status_summary", "benchmark_scorecard",
+              lambda: BP.plot_benchmark_method_status(status, score_fig)
+              if status is not None else None)
     return missing
 
 
@@ -1155,7 +1229,15 @@ def generate_unified_report() -> Path:
         "Estimates are mRNA-derived proportions (rows sum to 1), NOT absolute "
         "cell fractions.",
     ])
-    bulk += _figure_cards(H.OUT_BULK_DIR / "figures", out_dir, manifest, "bulk", _CAPTIONS)
+    bulk += _figure_cards(H.OUT_BULK_DIR / "figures", out_dir, manifest, "bulk",
+                          _CAPTIONS, exclude=_SUMMARY_FIGS)
+    _bulk_appendix = _figure_cards(H.OUT_BULK_DIR / "figures", out_dir, manifest,
+                                   "bulk", _CAPTIONS, only={"bulk_main_summary_figure"})
+    if _bulk_appendix:
+        bulk += C.collapsible_table(
+            "Technical composite diagnostics (bulk)", _bulk_appendix,
+            note="Crowded multi-panel technical summary; the primary figures "
+                 "above present the same information more clearly.")
     bulk += _df_collapsible("Estimated proportions (source data)",
                             H.OUT_BULK_DIR / "bulk_estimated_proportions.tsv")
     bulk += C.variable_dictionary(G.subset(["mRNA-derived proportion", "coverage R²", "unresolved mass"]))
@@ -1177,7 +1259,17 @@ def generate_unified_report() -> Path:
         "Real Visium has NO ground truth — results are concordance/structure, not "
         "accuracy.",
     ])
-    spat += _figure_cards(H.OUT_SPATIAL_DIR / "figures", out_dir, manifest, "spatial", _CAPTIONS)
+    spat += _figure_cards(H.OUT_SPATIAL_DIR / "figures", out_dir, manifest,
+                          "spatial", _CAPTIONS,
+                          exclude=_SUMMARY_FIGS | {"spatial_spot_pie_charts"})
+    _spat_appendix = _figure_cards(
+        H.OUT_SPATIAL_DIR / "figures", out_dir, manifest, "spatial", _CAPTIONS,
+        only={"spatial_main_summary_figure", "spatial_spot_pie_charts"})
+    if _spat_appendix:
+        spat += C.collapsible_table(
+            "Technical / exploratory figures (spatial)", _spat_appendix,
+            note="Crowded composite summary and exploratory per-spot pies; the "
+                 "primary maps above present the same information more clearly.")
     spat += C.variable_dictionary(G.subset(["entropy", "dominant fraction", "near-zero fraction", "Moran's I"]))
     spat += C.interpretation_guide(
         "Use this section to inspect where predicted RNA-derived compositions "
@@ -1233,29 +1325,66 @@ def generate_unified_report() -> Path:
     sections.append(Section("resolution", "8. Resolution, separability & spillover",
                             resb, links=rlinks))
 
-    # ---- 8. Benchmark ----
-    benchb = C.methodology_summary([
-        "Methods compared on identical harmonized inputs.",
-        "Only EXECUTED or IMPORTED methods are ranked; EXPORTED-only and SKIPPED "
-        "tools are listed but not scored.",
-        "Bulk pseudobulk has ground truth (accuracy valid); real Visium does not "
-        "(concordance/structure only).",
-        "Measured metrics (status, accuracy, runtime) come first; the weighted "
-        "composite is a scorecard, not objective accuracy.",
-    ])
-    benchb += _figure_cards(H.OUTPUTS_DIR / "benchmark" / "figures", out_dir,
-                            manifest, "benchmark", _CAPTIONS)
-    benchb += _df_collapsible("Best-method summary",
-                              bench.parent / "bulk" / "best_method_summary.tsv")
-    benchb += C.variable_dictionary(G.subset(
-        ["Pearson correlation", "RMSE", "concordance", "composite score"]))
-    benchb += C.interpretation_guide(
-        "Use this section to compare methods. Only executed or imported methods "
-        "are ranked; exported-only tools are listed but not scored.")
-    blinks2 = [("benchmark summary report", rel(bench))] if bench.exists() else []
-    sections.append(Section("benchmark", "9. Benchmark comparison", benchb, links=blinks2))
+    bench_links = [("benchmark summary report", rel(bench))] if bench.exists() else []
 
-    # ---- 9. Warnings & limitations ----
+    # ---- 9. Bulk benchmark (accuracy — ground truth available) ----
+    bbk = C.methodology_summary([
+        "Bulk pseudobulk mixtures have KNOWN ground truth, so accuracy metrics "
+        "(Pearson, RMSE, MAE) are valid here.",
+        "Only executed/imported BULK methods are shown; spatial methods are NOT "
+        "ranked here.",
+    ])
+    bbk += _figure_cards(H.OUTPUTS_DIR / "benchmark" / "bulk" / "figures",
+                         out_dir, manifest, "bulk_benchmark", _CAPTIONS)
+    bbk += _df_collapsible("Best-method summary (bulk)",
+                           bench.parent / "bulk" / "best_method_summary.tsv")
+    bbk += C.variable_dictionary(G.subset(["Pearson correlation", "RMSE"]))
+    bbk += C.interpretation_guide(
+        "Bulk pseudobulk mixtures have known ground truth, so accuracy metrics "
+        "are valid here. Higher Pearson / lower RMSE-MAE is better. "
+        "Skipped/exported-only tools are not ranked.")
+    sections.append(Section("bulk_benchmark",
+                            "9. Bulk benchmark: accuracy against pseudobulk ground truth",
+                            bbk, links=bench_links))
+
+    # ---- 10. Spatial benchmark (concordance / structure — NO ground truth) ----
+    sbk = C.methodology_summary([
+        "Real Visium data do not have spot-level ground truth in this benchmark; "
+        "therefore these metrics evaluate CONCORDANCE and SPATIAL STRUCTURE, NOT "
+        "accuracy.",
+        "Only spatial methods are shown; no Pearson/RMSE-vs-truth is reported "
+        "unless a synthetic spatial benchmark with known truth is provided.",
+    ])
+    sbk += _figure_cards(H.OUTPUTS_DIR / "benchmark" / "spatial" / "figures",
+                         out_dir, manifest, "spatial_benchmark", _CAPTIONS)
+    sbk += C.variable_dictionary(G.subset(["concordance", "Moran's I", "entropy",
+                                           "near-zero fraction", "dominant fraction"]))
+    sbk += C.interpretation_guide(
+        "These are concordance / spatial-structure metrics, not accuracy: real "
+        "Visium has no spot-level ground truth here. Use them to compare spatial "
+        "patterns and stability, not correctness.")
+    sections.append(Section("spatial_benchmark",
+                            "10. Spatial benchmark: concordance and spatial structure",
+                            sbk, links=bench_links))
+
+    # ---- 11. Benchmark scorecards & method status ----
+    scb = C.methodology_summary([
+        "The composite is a weighted multi-criteria SCORECARD, not an objective "
+        "accuracy ranking, and should not be used alone to select a method.",
+        "Bulk and spatial are scored within their own modality (never pooled).",
+    ])
+    scb += _figure_cards(H.OUTPUTS_DIR / "benchmark" / "scorecard" / "figures",
+                         out_dir, manifest, "benchmark_scorecard", _CAPTIONS)
+    scb += C.variable_dictionary(G.subset(["composite score"]))
+    scb += C.interpretation_guide(
+        "Read the measured bulk accuracy (section 9) and spatial structure "
+        "(section 10) FIRST; the composite scorecard is a convenience summary, "
+        "not an objective accuracy ranking.")
+    sections.append(Section("benchmark_scorecard",
+                            "11. Benchmark scorecards & method status", scb,
+                            links=bench_links))
+
+    # ---- 12. Warnings & limitations ----
     # Aggregate the run's real warnings from QC, spillover and separability
     # outputs (not just the figure-generation log) so the section is honest.
     warn_items = _collect_warnings()
@@ -1268,13 +1397,13 @@ def generate_unified_report() -> Path:
         "Fine subtype estimates in non-separable families are reported as "
         "unresolved mass; do not over-interpret them.",
     ])
-    sections.append(Section("warnings", "10. Warnings & limitations", wbody))
+    sections.append(Section("warnings", "12. Warnings & limitations", wbody))
 
-    # ---- 10. Methods ----
+    # ---- 13. Methods ----
     methods = H.OUT_SUMMARY_DIR / "methods.txt"
     mbody = ("<pre>" + C.esc(_read_text(methods)) + "</pre>" if methods.exists()
              else "<p class='muted'>Methods text not available.</p>")
-    sections.append(Section("methods", "11. Methods", mbody))
+    sections.append(Section("methods", "13. Methods", mbody))
 
     # ---- 11. Output files & source data ----
     # Record figures that could not be generated (missing input data) so the
@@ -1306,7 +1435,7 @@ def generate_unified_report() -> Path:
              + C.collapsible_table("All source-data tables (.tsv)",
                                    "<ul>" + "".join(f"<li>{C.esc(rel(p))}</li>"
                                                     for p in out_files) + "</ul>"))
-    sections.append(Section("outputs", "12. Output files & source data", obody))
+    sections.append(Section("outputs", "14. Output files & source data", obody))
 
     path = build_unified_report(
         out_dir / "report.html", sections,
@@ -1320,6 +1449,98 @@ def generate_unified_report() -> Path:
 # specific (non-generic) caption built from their humanized title via
 # `_caption_for`, so no figure carries a generic "TissueResolve output" caption.
 _CAPTIONS = {
+    # ---- Bulk benchmark (accuracy; section 9) ----
+    "bulk_method_status_summary": {
+        "subtitle": "bulk methods by status",
+        "caption": "Bulk benchmark method status. Counts of bulk benchmark methods "
+                   "per status (executed/imported/skipped/failed). Accuracy metric "
+                   "only applies to executed/imported bulk methods (pseudobulk "
+                   "ground truth available). Source: benchmark status.",
+        "how_to_read": "See how many bulk tools ran vs were skipped/failed.",
+        "methodology": "Status counts for modality=bulk methods.",
+    },
+    "bulk_fine_accuracy_leaderboard": {
+        "subtitle": "fine-level accuracy",
+        "caption": "Bulk fine-level accuracy leaderboard. Bars show Pearson "
+                   "correlation between predicted and known pseudobulk proportions "
+                   "for executed/imported bulk methods only (x = accuracy; y = "
+                   "method). Higher is better. This accuracy metric is valid "
+                   "because pseudobulk ground truth is available. Source: benchmark "
+                   "metrics.",
+        "how_to_read": "Compare measured accuracy; spatial methods are excluded.",
+        "methodology": "Accuracy vs known pseudobulk proportions; bulk-only.",
+    },
+    "bulk_family_accuracy_leaderboard": {
+        "subtitle": "family-level accuracy",
+        "caption": "Bulk family-level accuracy leaderboard. Family-level Pearson "
+                   "between predicted and known pseudobulk proportions for "
+                   "executed/imported bulk methods (accuracy metric; ground truth "
+                   "available). Source: benchmark family-level metrics.",
+        "how_to_read": "Family-level accuracy is usually higher than fine-level.",
+        "methodology": "Accuracy aggregated to broad families; bulk-only.",
+    },
+    "bulk_rmse_mae_comparison": {
+        "subtitle": "error (RMSE / MAE)",
+        "caption": "Bulk benchmark error. Grouped RMSE and MAE per bulk method vs "
+                   "pseudobulk ground truth (lower is better). Accuracy/error "
+                   "metric, valid because ground truth exists. Source: benchmark "
+                   "metrics.",
+        "how_to_read": "Lower bars = smaller error.",
+        "methodology": "RMSE/MAE vs known pseudobulk proportions.",
+    },
+    "bulk_runtime_comparison": {
+        "subtitle": "runtime (seconds)",
+        "caption": "Bulk benchmark runtime. Wall-clock seconds for executed/"
+                   "imported bulk methods (x = seconds; y = method). A cost "
+                   "(runtime) metric, not accuracy. Source: benchmark status.",
+        "how_to_read": "Compare cost; environment-dependent.",
+        "methodology": "Recorded runtime for bulk methods.",
+    },
+    # ---- Spatial benchmark (concordance/structure; section 10) ----
+    "spatial_method_status_summary": {
+        "subtitle": "spatial methods by status",
+        "caption": "Spatial benchmark method status. Counts of spatial methods per "
+                   "status. Real Visium has no spot-level ground truth here, so "
+                   "spatial methods are evaluated by concordance/structure, NOT "
+                   "accuracy. Source: benchmark status.",
+        "how_to_read": "See how many spatial tools ran vs were skipped/failed.",
+        "methodology": "Status counts for modality=spatial methods.",
+    },
+    "spatial_concordance_heatmap": {
+        "subtitle": "method agreement (not accuracy)",
+        "caption": "Spatial method concordance heatmap. Cells show pairwise "
+                   "agreement between spatial methods (colour = agreement). This is "
+                   "NOT accuracy because real Visium spot-level ground truth is "
+                   "unavailable. Source: per-spot prediction correlation.",
+        "how_to_read": "High agreement = methods produce similar spatial patterns.",
+        "methodology": "Pairwise per-spot prediction correlation between methods.",
+    },
+    "spatial_structure_metrics_summary": {
+        "subtitle": "spatial structure (not accuracy)",
+        "caption": "Spatial structure metrics. Moran's I / entropy / dominant / "
+                   "near-zero fraction per population (x = population; y = value). "
+                   "Structure metrics, NOT accuracy: real Visium has no ground "
+                   "truth here. Source: spatial outputs.",
+        "how_to_read": "Higher Moran's I = more spatial clustering; not correctness.",
+        "methodology": "Spatial-structure statistics on the predicted maps.",
+    },
+    "spatial_runtime_comparison": {
+        "subtitle": "runtime (seconds)",
+        "caption": "Spatial benchmark runtime. Wall-clock seconds for executed/"
+                   "imported spatial methods. A cost metric, not accuracy. Source: "
+                   "benchmark status.",
+        "how_to_read": "Compare cost; environment-dependent.",
+        "methodology": "Recorded runtime for spatial methods.",
+    },
+    "spatial_output_completeness_summary": {
+        "subtitle": "did methods produce output?",
+        "caption": "Spatial output completeness. Per-method status (did each "
+                   "spatial method produce usable output?). A completeness/"
+                   "robustness check, NOT accuracy; real Visium has no ground "
+                   "truth here. Source: benchmark status.",
+        "how_to_read": "Failed/skipped methods produced no usable spatial output.",
+        "methodology": "Per-method status for modality=spatial.",
+    },
     # ---- Reference QC (section 2) ----
     "reference_broad_family_composition": {
         "subtitle": "reference composition by broad family",
