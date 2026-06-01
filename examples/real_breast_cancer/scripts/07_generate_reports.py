@@ -482,6 +482,172 @@ def _read_text(path) -> str:
     return p.read_text(encoding="utf-8") if p.exists() else ""
 
 
+def _collect_warnings() -> list[str]:
+    """Aggregate the run's *real* warnings from every diagnostic source.
+
+    The previous report only read ``validation_summary/warnings.json`` and
+    looked for a non-existent ``"warnings"`` key, so it always showed
+    "No warnings recorded" even though the QC, spillover and separability
+    outputs contain genuine cautions.  This gathers them honestly:
+
+    * figure/processing warnings — ``validation_summary/warnings.json``
+      (``{"bulk": [...], "spatial": [...]}``),
+    * bulk QC recommendations — ``bulk/bulk_warnings.json`` (mismatch flags,
+      high-spillover/collinear cell types),
+    * spatial QC — ``spatial/spatial_warnings.json`` (non-convergence, low gene
+      overlap, recommendations),
+    * separability — ``resolution/pairwise_separability.tsv`` (poorly separable
+      pairs), and
+    * unresolved families — ``resolution/unresolved_families.tsv``.
+
+    Returns a de-duplicated, order-preserving list of warning strings.
+    """
+    items: list[str] = []
+
+    def _add(msg: str) -> None:
+        msg = (msg or "").strip()
+        if msg and msg not in items:
+            items.append(msg)
+
+    # 1. figure / processing warnings recorded during report generation
+    vs = H.OUT_SUMMARY_DIR / "warnings.json"
+    if vs.exists():
+        try:
+            w = json.loads(_read_text(vs))
+            if isinstance(w, dict):
+                for mod in ("bulk", "spatial"):
+                    for m in w.get(mod, []) or []:
+                        _add(f"{mod.capitalize()} processing: {m}")
+            elif isinstance(w, list):
+                for m in w:
+                    _add(str(m))
+        except Exception:
+            pass
+
+    # 2. bulk QC / spillover recommendations
+    bw = H.OUT_BULK_DIR / "bulk_warnings.json"
+    if bw.exists():
+        try:
+            w = json.loads(_read_text(bw))
+            for rec in (w.get("qc_recommendations") or []):
+                _add(f"Bulk QC: {rec}")
+            go = w.get("gene_overlap") or {}
+            if go.get("n_shared") is not None and go.get("n_reference"):
+                frac = go["n_shared"] / max(go["n_reference"], 1)
+                if frac < 0.5:
+                    _add(f"Bulk gene overlap is low: {go['n_shared']} of "
+                         f"{go['n_reference']} reference genes shared "
+                         f"({frac:.0%}).")
+        except Exception:
+            pass
+
+    # 3. spatial QC
+    sw = H.OUT_SPATIAL_DIR / "spatial_warnings.json"
+    if sw.exists():
+        try:
+            w = json.loads(_read_text(sw))
+            if w.get("converged") is False:
+                _add("Spatial model did not converge; spot estimates are "
+                     "unreliable.")
+            for rec in (w.get("qc_recommendations") or []):
+                _add(f"Spatial QC: {rec}")
+            go = w.get("gene_overlap") or {}
+            if go.get("n_shared") is not None and go.get("n_reference"):
+                frac = go["n_shared"] / max(go["n_reference"], 1)
+                if frac < 0.5:
+                    _add(f"Spatial gene overlap is low: {go['n_shared']} of "
+                         f"{go['n_reference']} reference genes shared "
+                         f"({frac:.0%}).")
+        except Exception:
+            pass
+
+    # 4. separability — poorly separable cell-type pairs
+    sep = H.OUTPUTS_DIR / "resolution" / "pairwise_separability.tsv"
+    if sep.exists():
+        try:
+            df = pd.read_csv(sep, sep="\t", comment="#")
+            if "resolvability" in df.columns:
+                n_bad = int((df["resolvability"].astype(str)
+                             .str.lower() == "unresolved").sum())
+                n_tot = len(df)
+                if n_bad:
+                    _add(f"{n_bad} of {n_tot} cell-type pairs are not "
+                         "separable from the reference; their fine subtype "
+                         "estimates are unreliable and are reported as "
+                         "unresolved family mass.")
+        except Exception:
+            pass
+
+    # 5. unresolved families
+    uf = H.OUTPUTS_DIR / "resolution" / "unresolved_families.tsv"
+    if uf.exists():
+        try:
+            df = pd.read_csv(uf, sep="\t", comment="#")
+            n = len(df)
+            if n:
+                _add(f"{n} cell-type family/families could not be resolved into "
+                     "subtypes at this reference's resolution; subtype mass is "
+                     "pooled as unresolved.")
+        except Exception:
+            pass
+
+    return items
+
+
+def _component_status(suit, name: str, default: str = "CAUTION") -> str:
+    """Status (PASS/CAUTION/WARNING/FAIL/UNKNOWN) of one suitability component.
+
+    ``components_frame`` indexes by component name, so reset the index to look it
+    up robustly whether ``component`` is the index or a column.
+    """
+    try:
+        df = suit.components_frame().reset_index()
+        col = "component" if "component" in df.columns else df.columns[0]
+        row = df[df[col].astype(str) == name]
+        if not row.empty:
+            return str(row.iloc[0]["status"])
+    except Exception:
+        pass
+    return default
+
+
+def _hierarchy_summary() -> dict:
+    """Read hierarchical_summary.json (families, n_fine, unresolved families)."""
+    p = H.OUTPUTS_DIR / "hierarchical" / "hierarchical_summary.json"
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(_read_text(p))
+    except Exception:
+        return {}
+
+
+def _decision_statuses(ctx: dict, suit, mp) -> dict:
+    """Derive the executive-decision status cards from real diagnostics.
+
+    Returns a dict with PASS/CAUTION/WARNING/FAIL (or UNKNOWN) per dimension plus
+    availability flags.  Nothing biological is inferred — these are QC verdicts.
+    """
+    bulk_ok = (H.OUT_BULK_DIR / "bulk_estimated_proportions.tsv").exists()
+    spatial_ok = (H.OUT_SPATIAL_DIR / "spatial_spot_proportions.tsv").exists()
+    bench = H.HARNESS_DIR.parent.parent / "benchmarks" / "outputs" / \
+        "benchmark_summary_report.html"
+    ref_status = (suit.classification if suit is not None else "UNKNOWN")
+    return {
+        "reference": ref_status,
+        "hierarchy": (_component_status(suit, "hierarchy_quality", "UNKNOWN")
+                      if suit is not None else
+                      ("PASS" if mp is not None else "UNKNOWN")),
+        "separability": (_component_status(suit, "fine_label_separability", "UNKNOWN")
+                         if suit is not None else "UNKNOWN"),
+        "input": (_component_status(suit, "gene_overlap", "UNKNOWN")
+                  if suit is not None else "UNKNOWN"),
+        "bulk_available": bulk_ok,
+        "spatial_available": spatial_ok,
+        "benchmark_available": bench.exists(),
+    }
+
+
 def _df_collapsible(title, path, max_rows=12, comment="#"):
     """Top rows inline + full table as a collapsible + source-data link."""
     from tissueresolve.report import components as C
@@ -498,6 +664,37 @@ def _df_collapsible(title, path, max_rows=12, comment="#"):
     return C.collapsible_table(title, head, note=note)
 
 
+def _caption_for(stem: str, section: str, captions: dict) -> dict:
+    """Resolve a *specific* caption for a figure.
+
+    Order: exact stem match -> prefix match -> a non-generic caption built from
+    the humanized title.  Never returns the old generic "Visual summary of a
+    TissueResolve output" text.
+    """
+    if stem in captions:
+        return captions[stem]
+    for key, cap in captions.items():
+        if key not in ("_default",) and stem.startswith(key):
+            return cap
+    title = stem.replace("_", " ").strip()
+    title = title[:1].upper() + title[1:] if title else "Figure"
+    return {
+        "subtitle": f"{section} diagnostic",
+        "caption": (f"{title}. Generated from the harmonized reference and "
+                    f"{section} query data; values are RNA-derived estimates "
+                    "(not absolute cell counts). Axes, colors and values are "
+                    "given in the linked source data (.tsv). Colors follow the "
+                    "deterministic hierarchical cell-type palette used "
+                    "throughout this report."),
+        "how_to_read": ("Compare the shown pattern with the QC verdicts in "
+                        "sections 2–4; treat fine subtypes cautiously where "
+                        "separability is low."),
+        "methodology": ("Produced by TissueResolve plotting from saved outputs; "
+                        "see the section methodology box and the figure manifest "
+                        "for parameters."),
+    }
+
+
 def _figure_cards(fig_dir, out_dir, manifest, section, captions):
     """Build figure cards for every figure HTML in *fig_dir*, register in manifest."""
     from tissueresolve.report import components as C
@@ -511,7 +708,7 @@ def _figure_cards(fig_dir, out_dir, manifest, section, captions):
     cards = []
     for fh in sorted(fig_dir.glob("*.html")):
         stem = fh.stem
-        cap = captions.get(stem, captions.get("_default"))
+        cap = _caption_for(stem, section, captions)
         data = fh.with_suffix(".data.tsv")
         links = [("interactive figure", rel(fh))]
         if data.exists():
@@ -521,8 +718,20 @@ def _figure_cards(fig_dir, out_dir, manifest, section, captions):
             if ex.exists():
                 links.append((f"{ext.upper()}", rel(ex)))
         title = stem.replace("_", " ").strip().capitalize()
+        # Embed the figure inline: prefer a static PNG (<img>, always renders);
+        # otherwise embed the interactive Plotly HTML via <iframe> so the figure
+        # body is never empty.
+        png = fh.with_suffix(".png")
+        if png.exists():
+            body_html = (f"<img src='{rel(png)}' alt='{title}' loading='lazy' "
+                         "style='max-width:100%;height:auto;border:1px solid "
+                         "#e3e8ef;border-radius:6px'/>")
+        else:
+            body_html = (f"<iframe src='{rel(fh)}' title='{title}' loading='lazy' "
+                         "style='width:100%;height:480px;border:1px solid "
+                         "#e3e8ef;border-radius:6px'></iframe>")
         cards.append(C.figure_card(
-            title=title, subtitle=cap["subtitle"], body_html="",
+            title=title, subtitle=cap["subtitle"], body_html=body_html,
             caption=cap["caption"], how_to_read=cap["how_to_read"],
             methodology=cap.get("methodology", ""),
             source_links=links))
@@ -569,6 +778,25 @@ def generate_unified_report() -> Path:
             ctx["broad"] = len(set(mp.values()))
     except Exception:
         pass
+    # Compute reference suitability ONCE (reused by the executive decision
+    # summary AND the reference-quality section) so headline statuses reflect
+    # this run, not a stale file.
+    suit = None
+    try:
+        from tissueresolve.reference.suitability import (
+            compute_reference_suitability_score, save_reference_suitability)
+        if ref0 is not None:
+            qgenes = (list(pd.read_csv(H.PSEUDOBULK_COUNTS, sep="\t", index_col=0,
+                                       comment="#").index.map(str))
+                      if H.PSEUDOBULK_COUNTS.exists() else None)
+            with _w.catch_warnings():
+                _w.simplefilter("ignore")
+                suit = compute_reference_suitability_score(
+                    ref0, query_genes=qgenes, mapping=mp)
+                save_reference_suitability(suit, H.OUT_REFERENCE_DIR)
+    except Exception:
+        suit = None
+    ctx["suit"] = suit
     try:
         if H.PSEUDOBULK_TRUE_PROPS.exists():
             tp = pd.read_csv(H.PSEUDOBULK_TRUE_PROPS, sep="\t", comment="#", index_col=0)
@@ -590,30 +818,73 @@ def generate_unified_report() -> Path:
     bench = H.HARNESS_DIR.parent.parent / "benchmarks" / "outputs" / "benchmark_summary_report.html"
     bench_status = "available" if bench.exists() else "not run"
 
-    # ---- 1. Executive summary ----
+    # ---- 1. Executive decision summary ----
+    st = _decision_statuses(ctx, suit, mp)
+    hs = _hierarchy_summary()
+    n_unres = len(hs.get("bulk_unresolved_families")
+                  or hs.get("spatial_unresolved_families") or [])
+    yn = lambda b: "yes" if b else "no"  # noqa: E731
+    status_cards = C.decision_status_grid([
+        ("Reference suitability", st["reference"],
+         "is the reference good enough?"),
+        ("Hierarchy", st["hierarchy"], "broad/fine labels usable?"),
+        ("Signature separability", st["separability"],
+         "can cell types be told apart?"),
+        ("Input compatibility", st["input"], "query vs reference overlap"),
+        ("Bulk results", yn(st["bulk_available"]), "available?"),
+        ("Spatial results", yn(st["spatial_available"]), "available?"),
+        ("Benchmark", yn(st["benchmark_available"]), "available?"),
+    ])
+    checklist = C.checklist([
+        ("Gene overlap between query and reference checked",
+         ctx["overlap"] not in ("—", None)),
+        ("Broad/fine cell-type labels present", mp is not None),
+        ("Minimum cells per cell type checked", suit is not None),
+        ("Cell-type imbalance checked", suit is not None),
+        ("Signature separability checked",
+         (H.OUTPUTS_DIR / "resolution" / "pairwise_separability.tsv").exists()),
+        ("Spillover risk checked",
+         (H.OUTPUTS_DIR / "resolution" / "spillover_risk_by_celltype.tsv").exists()),
+        ("Solver selected", bool(ctx["solver"])),
+        ("Spatial 'no ground truth' caveat shown",
+         st["spatial_available"]),
+    ])
     cards = {"Modality": ctx["modality"], "Samples (bulk)": ctx["samples"],
              "Spots (spatial)": ctx["spots"], "Reference cells": ctx["ref_cells"],
              "Genes": ctx["genes"], "Broad families": ctx["broad"],
              "Fine subpopulations": ctx["fine"], "Gene overlap": ctx["overlap"],
              "Solver": ctx["solver"], "Resolution mode": ctx["resolution_mode"],
-             "Benchmark": bench_status, "Report": "generated"}
-    summ = (C.metric_grid(cards)
+             "Unresolved families": n_unres or "—", "Benchmark": bench_status}
+    guide_bits = [
+        "Check the QC panels (sections 2–4) <b>before</b> interpreting any "
+        "deconvolution result.",
+    ]
+    if str(st["reference"]).upper() in ("WARNING", "FAIL"):
+        guide_bits.append(
+            f"Reference suitability is <b>{C.esc(st['reference'])}</b> — interpret "
+            "predictions cautiously.")
+    if str(st["separability"]).upper() in ("CAUTION", "WARNING", "FAIL"):
+        guide_bits.append(
+            "Fine-level separability is limited — prefer family-level results "
+            "where subtypes are not separable.")
+    summ = (C.estimate_note(
+                "<b>Analysis status.</b> The cards below are quality-control "
+                "verdicts, not biological conclusions.")
+            + status_cards
+            + "<h3 style='margin:14px 0 4px;font-size:14px'>Before interpreting "
+              "results</h3>" + checklist
+            + C.metric_grid(cards)
             + C.estimate_note(
-                "This report summarizes reference quality, input-data checks, "
-                "deconvolution predictions, model diagnostics, resolution limits, "
-                "and benchmark results. The values shown are <b>RNA-derived "
-                "estimates</b> and should be interpreted together with QC, "
-                "separability, and uncertainty metrics. The report does not infer "
-                "biological meaning beyond what the data support.")
-            + C.interpretation_guide(
-                "Use the sidebar to jump to a section. Start here for the headline "
-                "numbers, then check reference quality and warnings before trusting "
-                "fine-grained predictions."))
+                "This report provides QC, estimates, diagnostics, and visualization "
+                "tools. It does <b>not</b> determine biological causality or "
+                "validate cell identities without external evidence. Values shown "
+                "are <b>RNA-derived estimates</b>.")
+            + C.interpretation_guide(" ".join(guide_bits)))
     md = H.OUT_SUMMARY_DIR / "validation_summary.md"
     if md.exists():
         summ += C.collapsible_table("Text validation summary",
                                     "<pre>" + C.esc(_read_text(md)) + "</pre>")
-    sections.append(Section("summary", "1. Executive summary", summ))
+    sections.append(Section("summary", "1. Executive decision summary", summ))
 
     # ---- 2. Reference quality ----
     refq = C.methodology_summary([
@@ -624,23 +895,14 @@ def generate_unified_report() -> Path:
         "Minimum cells per type enforced; cross-donor variability recorded when "
         "multiple donors are present.",
     ])
-    try:
-        from tissueresolve.reference.suitability import (
-            compute_reference_suitability_score, save_reference_suitability)
-        if ref0 is not None:
-            qgenes = (list(pd.read_csv(H.PSEUDOBULK_COUNTS, sep="\t", index_col=0,
-                                       comment="#").index.map(str))
-                      if H.PSEUDOBULK_COUNTS.exists() else None)
-            with _w.catch_warnings():
-                _w.simplefilter("ignore")
-                suit = compute_reference_suitability_score(ref0, query_genes=qgenes, mapping=mp)
-                save_reference_suitability(suit, H.OUT_REFERENCE_DIR)
+    if suit is not None:
+        try:
             refq += (f"<p>Overall suitability: {C.status_badge(suit.classification)} "
                      f"(score {suit.overall_score})</p>"
                      + C.collapsible_table("Suitability components",
                                            suit.components_frame().to_html(border=0)))
-    except Exception:
-        pass
+        except Exception:
+            pass
     refq += _figure_cards(H.OUT_REFERENCE_DIR / "figures", out_dir, manifest,
                           "reference", _CAPTIONS)
     refq += C.variable_dictionary(G.subset(["separability", "spillover", "gene overlap"]))
@@ -651,7 +913,68 @@ def generate_unified_report() -> Path:
     sections.append(Section("reference", "2. Reference quality", refq,
                             links=[("reference tables", rel(H.OUT_REFERENCE_DIR))]))
 
-    # ---- 3. Input data ----
+    # ---- 3. Signature quality & hierarchy (QC, BEFORE any result) ----
+    sig = C.methodology_summary([
+        "Pairwise separability is computed from the reference expression profiles "
+        "(1 − Bhattacharyya coefficient); higher = more distinguishable.",
+        "Hierarchy usability checks whether broad families can be split into "
+        "reliably separable fine subtypes.",
+        "This section answers 'are the signatures good enough to tell cell types "
+        "apart?' and must be read BEFORE the deconvolution results.",
+    ])
+    if suit is not None:
+        sig += ("<p>Signature separability: "
+                f"{C.status_badge(_component_status(suit, 'fine_label_separability', 'UNKNOWN'))}"
+                " &nbsp; Hierarchy quality: "
+                f"{C.status_badge(_component_status(suit, 'hierarchy_quality', 'UNKNOWN'))}"
+                "</p>")
+    # Top confusable pairs (compact view; full table is source data)
+    sep_p = H.OUTPUTS_DIR / "resolution" / "pairwise_separability.tsv"
+    if sep_p.exists():
+        try:
+            sdf = pd.read_csv(sep_p, sep="\t", comment="#")
+            keep = [c for c in ("type_a", "type_b", "separability_score",
+                                "bhattacharyya", "resolvability") if c in sdf.columns]
+            sort_col = "separability_score" if "separability_score" in sdf.columns \
+                else ("bhattacharyya" if "bhattacharyya" in sdf.columns else keep[0])
+            asc = sort_col == "separability_score"
+            top = sdf.sort_values(sort_col, ascending=asc)[keep].head(15)
+            sig += ("<p class='muted'>The 15 hardest-to-distinguish cell-type "
+                    f"pairs (of {len(sdf)} total). Low separability means fine "
+                    "labels for these types are unreliable.</p>")
+            sig += C.collapsible_table(
+                "15 most confusable cell-type pairs",
+                top.to_html(index=False, border=0), open=True)
+        except Exception:
+            pass
+    # Hierarchy usability summary
+    if hs:
+        fams = hs.get("families") or []
+        unres = (hs.get("bulk_unresolved_families")
+                 or hs.get("spatial_unresolved_families") or [])
+        sig += C.metric_grid({
+            "Broad families": len(fams) or "—",
+            "Fine subpopulations": hs.get("n_fine", ctx["fine"]),
+            "Families resolved to subtypes": (len(fams) - len(unres)) if fams else "—",
+            "Families kept at family level": len(unres) or "—",
+        })
+        if unres:
+            sig += C.warning_box([
+                "These families cannot be split into separable subtypes at this "
+                "reference's resolution and are reported at the family level "
+                "(unresolved mass): " + ", ".join(map(str, unres)) + "."])
+    sig += C.variable_dictionary(G.subset(["separability", "spillover", "unresolved mass"]))
+    sig += C.interpretation_guide(
+        "If signature separability is CAUTION/WARNING/FAIL, or a family is listed "
+        "as unresolved, interpret those cell types at the family level rather than "
+        "as confident subtypes. Fine subtype labels should be treated cautiously "
+        "when separability is low.")
+    siglinks = [("resolution outputs", rel(H.OUTPUTS_DIR / "resolution"))] \
+        if (H.OUTPUTS_DIR / "resolution").exists() else []
+    sections.append(Section("signature", "3. Signature quality & hierarchy",
+                            sig, links=siglinks))
+
+    # ---- 4. Input data ----
     inp = C.methodology_summary([
         "Bulk: pseudobulk count mixtures with known ground-truth proportions.",
         "Spatial: a 10x Visium section (counts + array coordinates; H&E when present).",
@@ -662,7 +985,7 @@ def generate_unified_report() -> Path:
     inp += C.interpretation_guide(
         "Check that gene overlap is high and that the input type/normalization "
         "matches expectations before interpreting predictions.")
-    sections.append(Section("input", "3. Input data quality", inp))
+    sections.append(Section("input", "4. Input data quality", inp))
 
     # ---- 4. Bulk ----
     bulk = C.methodology_summary([
@@ -681,7 +1004,7 @@ def generate_unified_report() -> Path:
         "high-spillover populations dominate a sample.")
     blinks = [("detailed bulk report", rel(H.OUT_BULK_DIR / "report.html"))] \
         if (H.OUT_BULK_DIR / "report.html").exists() else []
-    sections.append(Section("bulk", "4. Bulk deconvolution", bulk, links=blinks))
+    sections.append(Section("bulk", "5. Bulk deconvolution", bulk, links=blinks))
 
     # ---- 5. Spatial ----
     he_present = any((H.OUT_SPATIAL_DIR / "figures").glob("*he*")) if (H.OUT_SPATIAL_DIR / "figures").exists() else False
@@ -703,7 +1026,7 @@ def generate_unified_report() -> Path:
         spat = "<p class='muted'>H&E overlay figures are included below.</p>" + spat
     slinks = [("detailed spatial report", rel(H.OUT_SPATIAL_DIR / "report.html"))] \
         if (H.OUT_SPATIAL_DIR / "report.html").exists() else []
-    sections.append(Section("spatial", "5. Spatial deconvolution", spat, links=slinks))
+    sections.append(Section("spatial", "6. Spatial deconvolution", spat, links=slinks))
 
     # ---- 6. Hierarchical ----
     hier_dir = H.OUTPUTS_DIR / "hierarchical"
@@ -726,7 +1049,7 @@ def generate_unified_report() -> Path:
         "Use this section to see which families could be split into reliable "
         "subtypes and which are reported at the family level (unresolved mass).")
     hlinks = [("hierarchical tables", rel(hier_dir))] if hier_dir.exists() else []
-    sections.append(Section("hierarchical", "6. Hierarchical broad→fine deconvolution",
+    sections.append(Section("hierarchical", "7. Hierarchical broad→fine deconvolution",
                             hier, links=hlinks))
 
     # ---- 7. Resolution / separability / spillover ----
@@ -744,7 +1067,7 @@ def generate_unified_report() -> Path:
         "Use this to judge what resolution you can trust: families with many "
         "non-separable subtypes should be interpreted at the broad level.")
     rlinks = [("resolution outputs", rel(res_dir))] if res_dir.exists() else []
-    sections.append(Section("resolution", "7. Resolution, separability & spillover",
+    sections.append(Section("resolution", "8. Resolution, separability & spillover",
                             resb, links=rlinks))
 
     # ---- 8. Benchmark ----
@@ -763,17 +1086,12 @@ def generate_unified_report() -> Path:
         "Use this section to compare methods. Only executed or imported methods "
         "are ranked; exported-only tools are listed but not scored.")
     blinks2 = [("benchmark summary report", rel(bench))] if bench.exists() else []
-    sections.append(Section("benchmark", "8. Benchmark comparison", benchb, links=blinks2))
+    sections.append(Section("benchmark", "9. Benchmark comparison", benchb, links=blinks2))
 
     # ---- 9. Warnings & limitations ----
-    warns = H.OUT_SUMMARY_DIR / "warnings.json"
-    warn_items = []
-    if warns.exists():
-        try:
-            w = json.loads(_read_text(warns))
-            warn_items = w if isinstance(w, list) else w.get("warnings", [])
-        except Exception:
-            warn_items = []
+    # Aggregate the run's real warnings from QC, spillover and separability
+    # outputs (not just the figure-generation log) so the section is honest.
+    warn_items = _collect_warnings()
     wbody = C.warning_box(warn_items) if warn_items else \
         "<p class='muted'>No warnings recorded for this run.</p>"
     wbody += C.limitation_box([
@@ -783,13 +1101,13 @@ def generate_unified_report() -> Path:
         "Fine subtype estimates in non-separable families are reported as "
         "unresolved mass; do not over-interpret them.",
     ])
-    sections.append(Section("warnings", "9. Warnings & limitations", wbody))
+    sections.append(Section("warnings", "10. Warnings & limitations", wbody))
 
     # ---- 10. Methods ----
     methods = H.OUT_SUMMARY_DIR / "methods.txt"
     mbody = ("<pre>" + C.esc(_read_text(methods)) + "</pre>" if methods.exists()
              else "<p class='muted'>Methods text not available.</p>")
-    sections.append(Section("methods", "10. Methods", mbody))
+    sections.append(Section("methods", "11. Methods", mbody))
 
     # ---- 11. Output files & source data ----
     man_path = manifest.save(out_dir / "figures")
@@ -799,7 +1117,7 @@ def generate_unified_report() -> Path:
              + C.collapsible_table("All source-data tables (.tsv)",
                                    "<ul>" + "".join(f"<li>{C.esc(rel(p))}</li>"
                                                     for p in out_files) + "</ul>"))
-    sections.append(Section("outputs", "11. Output files & source data", obody))
+    sections.append(Section("outputs", "12. Output files & source data", obody))
 
     path = build_unified_report(
         out_dir / "report.html", sections,
@@ -809,18 +1127,180 @@ def generate_unified_report() -> Path:
 
 
 # Per-figure captions: title is derived from filename; these add the
-# subtitle / full caption / how-to-read.  '_default' covers any unlisted figure.
+# subtitle / full caption / how-to-read / methodology.  Unlisted figures get a
+# specific (non-generic) caption built from their humanized title via
+# `_caption_for`, so no figure carries a generic "TissueResolve output" caption.
 _CAPTIONS = {
-    "_default": {
-        "subtitle": "TissueResolve figure",
-        "caption": "Visual summary of a TissueResolve output. Axes, colors and "
-                   "values are described in the linked source data; values are "
-                   "RNA-derived estimates, not absolute cell counts.",
-        "how_to_read": "Open the interactive figure and its source data (.tsv). "
-                       "Check whether patterns match expected groupings and whether "
-                       "low-confidence or high-spillover populations dominate.",
-        "methodology": "Generated by TissueResolve from the harmonized reference "
-                       "and query; see the section methodology box for details.",
+    "bulk_composition_clustered_barplot": {
+        "subtitle": "bulk composition by sample",
+        "caption": "Bulk RNA-derived composition by sample. Each stacked bar is "
+                   "one pseudobulk sample; segment height is the estimated mRNA "
+                   "proportion of a cell type/family (bar sums to 1). Colors are "
+                   "the hierarchical cell-type palette; samples are ordered by "
+                   "hierarchical clustering of their composition. RNA-derived "
+                   "proportions, NOT absolute cell fractions.",
+        "how_to_read": "Look for sample groups with similar composition and for "
+                       "families that dominate a sample. Interpret subtypes from "
+                       "low-separability families at the family level only.",
+        "methodology": "Weighted-NNLS family of solvers (solver=auto, chosen by "
+                       "gene-masking cross-validation); proportions normalized per "
+                       "sample.",
+    },
+    "bulk_composition_heatmap": {
+        "subtitle": "composition heatmap",
+        "caption": "Bulk composition heatmap. Rows are cell types/families, "
+                   "columns are samples; cell color encodes the RNA-derived "
+                   "proportion (legend on the figure). Rows and columns ordered by "
+                   "clustering. RNA-derived proportions, not absolute cell counts.",
+        "how_to_read": "Scan for blocks of co-varying cell types across samples; "
+                       "compare with the clustered barplot.",
+        "methodology": "Same per-sample proportions as the composition barplot, "
+                       "shown as a matrix.",
+    },
+    "bulk_qc_summary": {
+        "subtitle": "per-sample reconstruction QC",
+        "caption": "Bulk per-sample QC. Bars/points show reconstruction quality "
+                   "(coverage R² / profile correlation) and mismatch flags per "
+                   "sample. Higher reconstruction = the reference explains the "
+                   "sample better.",
+        "how_to_read": "Samples with low reconstruction or a mismatch flag should "
+                       "be interpreted cautiously.",
+        "methodology": "QC metrics recomputed from the saved fit; see bulk_qc.tsv.",
+    },
+    "bulk_uncertainty_plot": {
+        "subtitle": "estimate uncertainty",
+        "caption": "Bulk estimate uncertainty. Shows per-cell-type confidence "
+                   "intervals where bootstrap/CV uncertainty was computed; wider "
+                   "intervals mean less certain estimates.",
+        "how_to_read": "Prefer cell types with narrow intervals; treat wide-"
+                       "interval estimates as indicative only.",
+        "methodology": "Bootstrap/gene-masking CV when enabled; otherwise the "
+                       "figure notes that uncertainty was not computed.",
+    },
+    "bulk_separability_heatmap": {
+        "subtitle": "reference separability",
+        "caption": "Reference separability heatmap (bulk view). Rows/columns are "
+                   "cell types; color is pairwise separability (1 − Bhattacharyya "
+                   "coefficient). Darker/low values mark pairs that are hard to "
+                   "tell apart in the reference.",
+        "how_to_read": "Clusters of low separability indicate cell types whose "
+                       "fine estimates are unreliable — interpret at the family "
+                       "level.",
+        "methodology": "Bhattacharyya coefficient between per-cell-type expression "
+                       "profiles.",
+    },
+    "spatial_separability_heatmap": {
+        "subtitle": "reference separability",
+        "caption": "Reference separability heatmap (spatial view). Rows/columns "
+                   "are cell types; color is pairwise separability "
+                   "(1 − Bhattacharyya). Low values mark confusable pairs.",
+        "how_to_read": "Low-separability pairs should be interpreted at the family "
+                       "level on the spatial maps.",
+        "methodology": "Bhattacharyya coefficient between per-cell-type expression "
+                       "profiles.",
+    },
+    "bulk_spillover_heatmap": {
+        "subtitle": "spillover risk",
+        "caption": "Spillover-risk heatmap (bulk). Color encodes the correlation "
+                   "between cell-type signatures; high values mean signal can leak "
+                   "between those types during deconvolution.",
+        "how_to_read": "High off-diagonal values flag cell types whose estimates "
+                       "may be confounded with collinear partners.",
+        "methodology": "Expression-signature correlation proxy for spillover.",
+    },
+    "spatial_spillover_heatmap": {
+        "subtitle": "spillover risk",
+        "caption": "Spillover-risk heatmap (spatial). Color encodes signature "
+                   "correlation; high values mean signal can leak between types.",
+        "how_to_read": "High off-diagonal values flag confounded cell types.",
+        "methodology": "Expression-signature correlation proxy for spillover.",
+    },
+    "spillover_network": {
+        "subtitle": "high-risk spillover network",
+        "caption": "High-risk spillover network. Nodes are cell types (colored by "
+                   "broad family); edges connect pairs with high signature "
+                   "correlation (spillover risk), edge weight = risk. Only "
+                   "high-risk edges are drawn.",
+        "how_to_read": "Tightly connected groups share signal; estimates within "
+                       "them are less independent.",
+        "methodology": "Edges thresholded on the signature-correlation spillover "
+                       "proxy.",
+    },
+    "spatial_mean_composition_barplot": {
+        "subtitle": "tissue-average composition",
+        "caption": "Mean RNA-derived composition across the tissue section. Bars "
+                   "show the section-averaged proportion per cell type/family "
+                   "(colors = hierarchical palette). Spot-level RNA-derived "
+                   "composition, not cell counts; real Visium has no ground truth.",
+        "how_to_read": "Read as the average tissue makeup; inspect the spatial "
+                       "maps for where each population localizes.",
+        "methodology": "Mean over per-spot NB-CAR proportions.",
+    },
+    "spatial_dominant_cell_type_map": {
+        "subtitle": "dominant family per spot",
+        "caption": "Dominant predicted population per spot. Each spot is colored "
+                   "by its highest-proportion cell type/family (hierarchical "
+                   "palette) at its array coordinates. Spot-level RNA-derived "
+                   "composition, not direct cell identity.",
+        "how_to_read": "Compare regions with H&E morphology; do not treat the "
+                       "dominant label as a single-cell call.",
+        "methodology": "Argmax of per-spot NB-CAR proportions.",
+    },
+    "spatial_abundance_maps": {
+        "subtitle": "abundance maps",
+        "caption": "Spatial abundance maps for top broad families. Each panel "
+                   "shows one family's RNA-derived proportion across spots "
+                   "(continuous color scale). Spot-level composition, not counts.",
+        "how_to_read": "Look for spatially coherent regions of high abundance; "
+                       "compare with H&E.",
+        "methodology": "Per-spot NB-CAR proportions for the top families by mean "
+                       "abundance.",
+    },
+    "spatial_morans_i_barplot": {
+        "subtitle": "spatial autocorrelation",
+        "caption": "Spatial autocorrelation (Moran's I) of predicted populations. "
+                   "Bars rank cell types/families by Moran's I; higher = more "
+                   "spatially clustered, near 0 = spatially random.",
+        "how_to_read": "High Moran's I indicates structured localization; it is a "
+                       "structure statistic, not an accuracy measure.",
+        "methodology": "Moran's I computed on the spot graph from array "
+                       "coordinates.",
+    },
+    "spatial_spot_pie_charts": {
+        "subtitle": "exploratory — per-spot pies",
+        "caption": "EXPLORATORY: per-spot composition pie charts. Each pie shows a "
+                   "spot's RNA-derived composition. Dense and hard to read at "
+                   "scale; provided for exploration only, not as a primary view.",
+        "how_to_read": "Use the dominant-family and abundance maps as the primary "
+                       "spatial views; treat pies as exploratory.",
+        "methodology": "Per-spot NB-CAR proportions drawn as pies.",
+    },
+    "he_spots_check": {
+        "subtitle": "H&E + spot alignment",
+        "caption": "H&E and Visium spot alignment. Gray spots are overlaid on the "
+                   "H&E image at their array coordinates to verify registration "
+                   "before interpreting any abundance map.",
+        "how_to_read": "Confirm spots fall on tissue and align with morphology "
+                       "before trusting spatial overlays.",
+        "methodology": "Spot coordinates overlaid on the section H&E.",
+    },
+    "he_dominant_cell_type": {
+        "subtitle": "dominant family over H&E",
+        "caption": "Dominant predicted broad family over H&E. Spots colored by "
+                   "their top family (hierarchical palette) on the H&E image. "
+                   "Spot-level RNA-derived composition, not cell identity.",
+        "how_to_read": "Compare colored regions with visible tissue morphology; "
+                       "do not treat as single-cell identity.",
+        "methodology": "Argmax of per-spot proportions over the H&E.",
+    },
+    "he_abundance": {  # prefix match for he_abundance_<celltype>
+        "subtitle": "abundance over H&E",
+        "caption": "Abundance of one broad family over H&E. Spot color encodes "
+                   "that family's RNA-derived proportion on the H&E image "
+                   "(continuous scale). Spot-level composition, not counts.",
+        "how_to_read": "Look for high-abundance regions and compare with "
+                       "morphology; this is RNA-derived, not a direct count.",
+        "methodology": "Per-spot NB-CAR proportion for the named family over H&E.",
     },
 }
 

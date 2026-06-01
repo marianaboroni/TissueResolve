@@ -47,6 +47,40 @@ def metric_grid(cards: Mapping) -> str:
     return f"<div class='metric-grid'>{''.join(items)}</div>"
 
 
+def decision_status_card(label: str, status: str, sub: str = "") -> str:
+    """A single decision card: a label, a PASS/CAUTION/WARNING/FAIL (or
+    yes/no/available) badge, and an optional one-line sub-note."""
+    sub_html = f"<div class='sub'>{esc(sub)}</div>" if sub else ""
+    return (f"<div class='metric-card status-card'>"
+            f"<div class='label'>{esc(label)}</div>"
+            f"<div class='value'>{status_badge(status)}</div>{sub_html}</div>")
+
+
+def decision_status_grid(items: Sequence) -> str:
+    """*items*: sequence of (label, status) or (label, status, sub)."""
+    cards = []
+    for it in items:
+        label, status = it[0], it[1]
+        sub = it[2] if len(it) > 2 else ""
+        cards.append(decision_status_card(label, status, sub))
+    return f"<div class='metric-grid'>{''.join(cards)}</div>"
+
+
+def checklist(items: Sequence) -> str:
+    """A "before interpreting results" checklist.
+
+    *items*: sequence of (text, state) where state is True (done/✓),
+    False (not done/✗) or None (not applicable/•).
+    """
+    rows = []
+    for text, state in items:
+        mark, cls = ("✓", "ok") if state is True else \
+            (("✗", "bad") if state is False else ("•", "na"))
+        rows.append(f"<li class='check-{cls}'><span class='check-mark'>{mark}</span> "
+                    f"{esc(text)}</li>")
+    return f"<ul class='checklist'>{''.join(rows)}</ul>"
+
+
 def method_box(html_text: str) -> str:
     return f"<div class='methods-card'>{html_text}</div>"
 

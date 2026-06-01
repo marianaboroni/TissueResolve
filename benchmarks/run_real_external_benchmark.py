@@ -349,8 +349,21 @@ def _write_report(status: pd.DataFrame, comp: pd.DataFrame) -> None:
     imported = status[status.get("imported", False)].index.tolist()
     skipped = status[status["status"] == "skipped"].index.tolist()
     failed = status[status.get("failed", False)].index.tolist()
-    ranked = comp[comp["final_score"].notna()].sort_values("final_score", ascending=False)
-    best = ranked.index[0] if not ranked.empty else "—"
+    ranked = comp[comp["final_score"].notna()]
+    # Best is reported *per modality* — bulk and spatial composite scores are not
+    # comparable (spatial has no ground truth, so its accuracy dimension is
+    # dropped), so there is no single cross-modality winner.
+    best_by_modality: dict[str, str] = {}
+    if not ranked.empty and "modality" in ranked.columns:
+        for mod, grp in ranked.groupby("modality"):
+            grp = grp.sort_values("final_score", ascending=False)
+            if not grp.empty:
+                best_by_modality[str(mod)] = grp.index[0]
+    elif not ranked.empty:
+        best_by_modality["all"] = ranked.sort_values(
+            "final_score", ascending=False).index[0]
+    best_html = "; ".join(f"{mod}: <b>{name}</b>"
+                          for mod, name in best_by_modality.items()) or "—"
     css = "body{font-family:Arial,sans-serif;max-width:1000px;margin:0 auto;padding:20px}" \
           "table{border-collapse:collapse;font-size:13px}th,td{border:1px solid #ccc;padding:4px 8px}" \
           "th{background:#f0f3f8}.warn{background:#fff4e5;border:1px solid #dd8452;padding:10px}"
@@ -360,11 +373,15 @@ def _write_report(status: pd.DataFrame, comp: pd.DataFrame) -> None:
             f"<li>Imported: {imported or '—'}</li>"
             f"<li>Skipped (not installed): {skipped or '—'}</li>"
             f"<li>Failed: {failed or '—'}</li>"
-            f"<li><b>Best overall composite:</b> {best}</li></ul>",
+            f"<li><b>Best composite (per modality):</b> {best_html}</li></ul>",
             "<h2>2. Method status</h2>", status.to_html(border=0),
-            "<h2>6. Composite score</h2>", comp.to_html(border=0),
+            "<h2>6. Composite score</h2>",
+            "<p class='warn'>Ranks are computed <b>within each modality</b>: bulk "
+            "(pseudobulk ground truth) and spatial (no ground truth) are separate "
+            "leaderboards and their composite scores are not directly comparable.</p>",
+            comp.to_html(border=0),
             "<h2>7. Best tool by scenario</h2>",
-            f"<p>Best overall composite: <b>{best}</b>. Accuracy/runtime per the "
+            f"<p>Best composite per modality: {best_html}. Accuracy/runtime per the "
             "composite table; only executed/imported tools are scored.</p>",
             "<h2>8. Metric explanations</h2>",
             "<ul><li><b>Pearson/Spearman</b>: correlation of predicted vs true "

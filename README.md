@@ -305,5 +305,6 @@ Research software / pre-release.
 
 ## License
 
-License metadata is declared as BSD-3-Clause in `pyproject.toml`.
-A top-level `LICENSE` file is not currently present in this repository.
+TissueResolve is released under the MIT License. See the top-level
+[`LICENSE`](LICENSE) file for the full text; the same license is declared in
+`pyproject.toml`.

@@ -52,6 +52,44 @@ def test_composite_weights_load():
     assert w["accuracy"] == pytest.approx(0.35)
 
 
+def _mixed_modality_frame():
+    """Bulk methods carry pseudobulk accuracy; spatial methods have none."""
+    return pd.DataFrame({
+        "modality": ["bulk", "bulk", "spatial", "spatial"],
+        "status": ["executed", "executed", "executed", "executed"],
+        "accuracy": [0.77, 0.68, np.nan, np.nan],
+        "runtime_seconds": [16.0, 1.7, 120.0, 90.0],
+    }, index=["TissueResolve_auto", "NNLS_baseline", "CARD", "cell2location"])
+
+
+def test_composite_ranks_within_modality_no_spatial_leak():
+    """Spatial methods must not be ranked inside the bulk (accuracy) leaderboard,
+    and ranks must restart per modality."""
+    from benchmarks.shared.composite_score import compute_composite_scores
+    comp = compute_composite_scores(_mixed_modality_frame(), has_ground_truth=True)
+    # per-row modality is preserved, not stamped to a single scalar
+    assert comp.loc["CARD", "modality"] == "spatial"
+    assert comp.loc["TissueResolve_auto", "modality"] == "bulk"
+    # spatial methods have no accuracy dimension (no ground truth)
+    assert np.isnan(comp.loc["CARD", "accuracy_score"])
+    assert np.isnan(comp.loc["cell2location", "accuracy_score"])
+    # bulk methods keep their accuracy
+    assert not np.isnan(comp.loc["TissueResolve_auto", "accuracy_score"])
+    # ranks restart within each modality: each group has exactly one rank==1
+    for mod in ("bulk", "spatial"):
+        grp = comp[comp["modality"] == mod]
+        assert (grp["rank"] == 1).sum() == 1
+
+
+def test_composite_runtime_normalised_within_modality():
+    """The fastest bulk tool and the fastest spatial tool each score 1.0 — the
+    spatial group is not penalised against the bulk group's faster runtimes."""
+    from benchmarks.shared.composite_score import compute_composite_scores
+    comp = compute_composite_scores(_mixed_modality_frame(), has_ground_truth=True)
+    assert comp.loc["NNLS_baseline", "runtime_resource_score"] == pytest.approx(1.0)
+    assert comp.loc["cell2location", "runtime_resource_score"] == pytest.approx(1.0)
+
+
 # --- imported results --------------------------------------------------------
 
 def test_imported_result_included_and_marked(tmp_path):

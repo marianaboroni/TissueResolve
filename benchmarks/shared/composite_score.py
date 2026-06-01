@@ -55,26 +55,59 @@ def compute_composite_scores(per_method: pd.DataFrame, *, modality: str = "bulk"
                              has_ground_truth: bool = True,
                              weights: Optional[dict] = None) -> pd.DataFrame:
     """*per_method* indexed by method with columns possibly including
-    ``status``, ``accuracy`` (0..1), ``runtime_seconds``, ``robustness``.
+    ``status``, ``modality`` (``"bulk"`` / ``"spatial"``), ``accuracy`` (0..1),
+    ``runtime_seconds``, ``robustness``.
 
-    Returns a scored, ranked table; only executed/imported tools are scored.
+    Returns a scored table.  Scoring and ranking are **per-modality**: bulk and
+    spatial methods are never pooled into a single leaderboard, because their
+    final scores are not comparable (bulk has pseudobulk ground truth and a real
+    accuracy dimension; real spatial has none, so its accuracy is excluded and
+    the remaining weights are renormalised).  ``rank`` is therefore computed
+    *within* each modality, and the runtime dimension is normalised within each
+    modality (the fastest bulk tool and the fastest spatial tool each score
+    1.0).  Only executed/imported tools are scored.
+
+    ``modality`` / ``has_ground_truth`` are fallbacks used only when the frame
+    lacks a ``modality`` column (and per-row ``accuracy``).
     """
-    w = dict(weights or DEFAULT_WEIGHTS)
+    base_w = dict(weights or DEFAULT_WEIGHTS)
     df = per_method.copy()
     scored_mask = df.get("status", pd.Series("executed", index=df.index)).isin(
         ["executed", "success", "imported", "executed_imported"])
-    if not has_ground_truth:
-        w.pop("accuracy", None)
-    total_w = sum(w.values())
-    w = {k: v / total_w for k, v in w.items()}
 
-    runtime = _runtime_score(df.get("runtime_seconds", pd.Series(1.0, index=df.index)))
+    # Per-row modality (column wins; else fall back to the scalar argument).
+    if "modality" in df.columns:
+        row_modality = df["modality"].astype(str)
+    else:
+        row_modality = pd.Series(modality, index=df.index)
+
+    # Runtime is normalised *within* each modality so the two groups are scored
+    # on their own scale rather than the global fastest tool.
+    runtime_raw = df.get("runtime_seconds", pd.Series(1.0, index=df.index))
+    runtime = pd.Series(np.nan, index=df.index, dtype=float)
+    for mod, idx in row_modality.groupby(row_modality).groups.items():
+        runtime.loc[idx] = _runtime_score(runtime_raw.loc[idx])
+
     rows = []
     for m in df.index:
         prior = _PRIORS.get(m, _DEFAULT_PRIOR)
         acc = float(df.loc[m].get("accuracy", np.nan)) if "accuracy" in df.columns else np.nan
+        # ``has_ground_truth`` is a global override (False => nobody gets an
+        # accuracy dimension).  When ground truth is allowed, a row earns the
+        # accuracy dimension only if it actually carries an accuracy value
+        # (pseudobulk does; real spatial does not) — which is what de-leaks the
+        # spatial methods out of the accuracy-bearing bulk ranking.
+        if "accuracy" in df.columns:
+            row_has_gt = has_ground_truth and (not np.isnan(acc))
+        else:
+            row_has_gt = has_ground_truth
+        w = dict(base_w)
+        if not row_has_gt:
+            w.pop("accuracy", None)
+        total_w = sum(w.values())
+        w = {k: v / total_w for k, v in w.items()}
         dims = {
-            "accuracy_score": acc if has_ground_truth else np.nan,
+            "accuracy_score": acc if row_has_gt else np.nan,
             "robustness_score": float(df.loc[m].get("robustness", prior["robustness"])),
             "usability_score": prior["usability"],
             "interpretability_score": prior["interpretability"],
@@ -90,11 +123,13 @@ def compute_composite_scores(per_method: pd.DataFrame, *, modality: str = "bulk"
             final = round(fs, 4)
         else:
             final = np.nan
-        rows.append({"method": m, "modality": modality,
+        rows.append({"method": m, "modality": row_modality.loc[m],
                      "status": df.loc[m].get("status", "executed"),
                      **{k: round(v, 4) if not (isinstance(v, float) and np.isnan(v)) else np.nan
                         for k, v in dims.items()},
                      "final_score": final})
     out = pd.DataFrame(rows).set_index("method")
-    out["rank"] = out["final_score"].rank(ascending=False, method="min")
-    return out.sort_values("final_score", ascending=False)
+    # Rank within modality — bulk and spatial are separate leaderboards.
+    out["rank"] = out.groupby("modality")["final_score"].rank(
+        ascending=False, method="min")
+    return out.sort_values(["modality", "final_score"], ascending=[True, False])

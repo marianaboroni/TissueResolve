@@ -23,7 +23,7 @@ def test_style_has_required_css_classes():
                 "limitation-card", "source-data-link", "collapsible-table",
                 "interpretation-guide", "figure-caption", "figure-legend",
                 "status-pass", "status-caution", "status-warning", "status-critical",
-                "how-to-read"):
+                "how-to-read", "checklist", "status-card"):
         assert f".{cls}" in REPORT_CSS, f"missing CSS class .{cls}"
 
 
@@ -58,6 +58,23 @@ def test_collapsible_table_renders_details():
 def test_status_badge_classes():
     assert "status-pass" in C.status_badge("PASS")
     assert "status-critical" in C.status_badge("FAIL")
+
+
+def test_decision_status_grid_renders_badges():
+    html = C.decision_status_grid([
+        ("Reference suitability", "WARNING", "is the reference good enough?"),
+        ("Bulk results", "yes"),
+    ])
+    assert "status-warning" in html and "Reference suitability" in html
+    assert "is the reference good enough?" in html
+    # a two-element item (no sub) still renders
+    assert "Bulk results" in html
+
+
+def test_checklist_marks_states():
+    html = C.checklist([("done", True), ("not done", False), ("n/a", None)])
+    assert "check-ok" in html and "check-bad" in html and "check-na" in html
+    assert "done" in html and "not done" in html and "n/a" in html
 
 
 def test_variable_dictionary_renders_terms():

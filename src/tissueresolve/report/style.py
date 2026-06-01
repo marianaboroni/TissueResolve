@@ -112,4 +112,11 @@ th{background:#f1f5f8;font-weight:600}
 .status-critical{background:#f7dedb;color:var(--crit)}
 .estimate-note{background:var(--accent-soft);border-left:4px solid var(--accent);
   padding:9px 13px;border-radius:6px;margin:10px 0;font-size:13px}
+.status-card .value{font-size:15px}
+.checklist{list-style:none;padding:0;margin:10px 0;columns:2;column-gap:24px}
+.checklist li{font-size:12.5px;margin:3px 0;break-inside:avoid}
+.checklist .check-mark{font-weight:700;width:1.1em;display:inline-block}
+.check-ok .check-mark{color:var(--pass)}
+.check-bad .check-mark{color:var(--crit)}
+.check-na .check-mark{color:var(--muted)}
 """
