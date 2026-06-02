@@ -192,3 +192,31 @@ low-confidence categories use neutral grey. The mapping is saved to
 `cell_type_color_map.tsv` (columns: `broad_cell_type`, `fine_cell_type`,
 `color_hex`, `display_label`, `palette_source`, `color_role`). Re-running the
 report from the same outputs reproduces identical colours.
+
+## Main report vs technical appendix (v0.1)
+
+The report is split into two files:
+
+- **`report.html`** — the concise report you read first. It is **QC-first**:
+  assess the reference and signature quality, input compatibility, and the
+  *trusted resolution level* **before** reading predictions. Broad-level results
+  come before fine-level results, and fine-level results are flagged cautious
+  when separability is low. Bulk and spatial benchmarks are shown **separately**.
+- **`technical_appendix.html`** — full separability/spillover heatmaps, spillover
+  networks, spot pies, the large signature heatmap, and the complete source-data
+  listing. The main report links here; this file links back.
+
+How to read it:
+
+1. **Reference & signature QC first.** If reference suitability is WARNING/FAIL
+   or separability is low, interpret predictions cautiously and prefer
+   family-level results.
+2. **Broad before fine.** Trust broad families; trust a fine subtype only when
+   the resolution summary marks its family resolvable. `unresolved_<family>`
+   mass is the honest "we cannot split this further" result — not a missing value.
+3. **Spatial benchmark is not accuracy.** Real Visium has no spot-level ground
+   truth, so the spatial benchmark reports concordance / spatial structure /
+   runtime, never accuracy (accuracy appears only for synthetic spatial truth).
+4. **Where the full data live.** Every figure writes a `.data.tsv`; the figure
+   manifest (`figures/figure_manifest.tsv`) maps each figure to its data, and the
+   full table listing is in the technical appendix.

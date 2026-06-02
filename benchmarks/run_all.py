@@ -28,6 +28,10 @@ def main(argv=None) -> int:
     ap.add_argument("--toy", action="store_true")
     ap.add_argument("--use-existing-real-data", action="store_true")
     ap.add_argument("--no-external", action="store_true")
+    ap.add_argument("--include-imported", action="store_true",
+                    help="Include externally-run tool predictions imported via "
+                         "benchmarks/import_external_results.py (counted as "
+                         "executed/imported, not exported-only).")
     ap.add_argument("--max-spots", type=int, default=600)
     args = ap.parse_args(argv)
 
@@ -38,6 +42,8 @@ def main(argv=None) -> int:
         common.append("--use-existing-real-data")
     if args.no_external:
         common.append("--no-external")
+    if args.include_imported:
+        common.append("--include-imported")
 
     B.main(common + (["--toy"] if args.toy else []))
     S.main(common + (["--toy"] if args.toy else []) +

@@ -1054,6 +1054,7 @@ def generate_unified_report() -> Path:
     rel = lambda p: os.path.relpath(p, out_dir)  # noqa: E731
     manifest = FigureManifest()
     sections = []
+    appendix_sections = []   # technical figures/tables → separate technical_appendix.html
 
     # ---- gather context (defensive) ----
     ctx = {"modality": "bulk + spatial", "samples": "—", "spots": "—",
@@ -1237,12 +1238,14 @@ def generate_unified_report() -> Path:
                                   manifest, "signature", _CAPTIONS,
                                   only=_SIGNATURE_APPENDIX_FIGS)
     if _sig_appendix:
-        sig += C.collapsible_table(
-            "Technical appendix (signatures): full signature matrix heatmap",
-            _sig_appendix,
-            note="Large gene × cell-type heatmap moved out of the main view; the "
-                 "confusable-pairs and recommended-resolution summaries above are "
-                 "the actionable views.")
+        appendix_sections.append(Section(
+            "appx_signature", "Signatures — full signature matrix heatmap",
+            "<p class='muted'>Large gene × cell-type heatmap (the confusable-pairs "
+            "and recommended-resolution summaries in the main report are the "
+            "actionable views).</p>" + _sig_appendix))
+        sig += ("<p class='muted'>Full signature matrix heatmap → "
+                "<a href='technical_appendix.html#appx_signature'>technical "
+                "appendix</a>.</p>")
     # Top confusable pairs (compact view; full table is source data)
     sep_p = H.OUTPUTS_DIR / "resolution" / "pairwise_separability.tsv"
     if sep_p.exists():
@@ -1315,11 +1318,15 @@ def generate_unified_report() -> Path:
     _bulk_appendix = _figure_cards(H.OUT_BULK_DIR / "figures", out_dir, manifest,
                                    "bulk", _CAPTIONS, only=_BULK_APPENDIX_FIGS)
     if _bulk_appendix:
-        bulk += C.collapsible_table(
-            "Technical appendix (bulk): full separability/spillover heatmaps, "
-            "spillover network, composite summary", _bulk_appendix,
-            note="Technical diagnostics moved out of the main view; the primary "
-                 "figures above present the actionable information more clearly.")
+        appendix_sections.append(Section(
+            "appx_bulk", "Bulk — full separability/spillover heatmaps, spillover "
+            "network, composite summary",
+            "<p class='muted'>Technical bulk diagnostics (the primary bulk "
+            "figures in the main report present the actionable information).</p>"
+            + _bulk_appendix))
+        bulk += ("<p class='muted'>Full bulk separability/spillover heatmaps + "
+                 "network → <a href='technical_appendix.html#appx_bulk'>technical "
+                 "appendix</a>.</p>")
     bulk += _df_collapsible("Estimated proportions (source data)",
                             H.OUT_BULK_DIR / "bulk_estimated_proportions.tsv")
     bulk += C.variable_dictionary(G.subset(["mRNA-derived proportion", "coverage R²", "unresolved mass"]))
@@ -1348,13 +1355,16 @@ def generate_unified_report() -> Path:
         H.OUT_SPATIAL_DIR / "figures", out_dir, manifest, "spatial", _CAPTIONS,
         only=_SPATIAL_APPENDIX_FIGS)
     if _spat_appendix:
-        spat += C.collapsible_table(
-            "Technical / exploratory figures (spatial): full separability/"
-            "spillover heatmaps, spillover network, composite summary, per-spot pies",
-            _spat_appendix,
-            note="Technical and exploratory figures moved out of the main view; "
-                 "the primary maps above present the actionable information more "
-                 "clearly. Per-spot pies are exploratory only.")
+        appendix_sections.append(Section(
+            "appx_spatial", "Spatial — full separability/spillover heatmaps, "
+            "spillover network, composite summary, exploratory per-spot pies",
+            "<p class='muted'>Technical and exploratory spatial figures (the "
+            "primary maps in the main report present the actionable information; "
+            "per-spot pies are exploratory only).</p>" + _spat_appendix))
+        spat += ("<p class='muted'>Full spatial separability/spillover heatmaps, "
+                 "network and exploratory per-spot pies → "
+                 "<a href='technical_appendix.html#appx_spatial'>technical "
+                 "appendix</a>.</p>")
     spat += C.variable_dictionary(G.subset(["entropy", "dominant fraction", "near-zero fraction", "Moran's I"]))
     spat += C.interpretation_guide(
         "Use this section to inspect where predicted RNA-derived compositions "
@@ -1511,16 +1521,36 @@ def generate_unified_report() -> Path:
     man_path = manifest.save(out_dir / "figures")
     n_gen = len(manifest.records) - n_missing
     out_files = sorted(p for p in out_dir.rglob("*.tsv"))[:100]
+    # The full source-data table listing lives in the technical appendix; the
+    # main report only summarises and links to it + the manifest.
+    appendix_sections.append(Section(
+        "appx_source_data", "Full source-data tables (.tsv)",
+        "<p class='muted'>Every figure also writes a <code>.data.tsv</code>; the "
+        "complete listing is below. The figure manifest "
+        f"(<code>{C.esc(rel(man_path))}</code>) maps each figure to its data.</p>"
+        + "<ul>" + "".join(f"<li>{C.esc(rel(p))}</li>" for p in out_files) + "</ul>"))
     obody = (C.estimate_note(
                  f"Figure manifest: {rel(man_path)} — {n_gen} figures generated, "
                  f"{n_missing} recorded as missing_data (with reasons).")
              + C.metric_grid({"Figures generated": n_gen,
                               "Figures missing data": n_missing,
                               "Source-data tables": len(out_files)})
-             + C.collapsible_table("All source-data tables (.tsv)",
-                                   "<ul>" + "".join(f"<li>{C.esc(rel(p))}</li>"
-                                                    for p in out_files) + "</ul>"))
+             + "<p>Full source-data table listing and all technical/exploratory "
+               "figures → <a href='technical_appendix.html'>technical "
+               "appendix</a>.</p>")
     sections.append(Section("outputs", "14. Output files & source data", obody))
+
+    # --- write the separate technical appendix file ---
+    if appendix_sections:
+        back = Section("appx_top", "Technical appendix",
+                       "<p><a href='report.html'>← Back to the main report</a></p>"
+                       "<p class='muted'>Full heatmaps, spillover networks, "
+                       "exploratory figures and complete source-data listings that "
+                       "are intentionally kept out of the concise main report.</p>")
+        build_unified_report(
+            out_dir / "technical_appendix.html", [back] + appendix_sections,
+            title="TissueResolve — technical appendix",
+            subtitle="full diagnostics, exploratory figures and source data")
 
     path = build_unified_report(
         out_dir / "report.html", sections,

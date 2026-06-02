@@ -137,7 +137,8 @@ def score_batch_confounding(obs: Optional[pd.DataFrame] = None,
         return ComponentScore("batch_confounding", float("nan"), "UNKNOWN",
                               "no batch/donor metadata available")
     try:
-        from benchmarks.shared.batch_effects import compute_celltype_batch_confounding
+        from tissueresolve.diagnostics.batch_effects import (
+            compute_celltype_batch_confounding)
         conf = compute_celltype_batch_confounding(obs, celltype_col, batch_col)
         frac = float(conf["confounded"].mean())
         s = float(1.0 - frac)

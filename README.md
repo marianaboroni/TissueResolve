@@ -172,15 +172,25 @@ tissueresolve report --modality spatial --results-dir results/spatial
 
 ## Outputs
 
-Runs produce:
+A `tissueresolve run` writes an analysis bundle:
 
-- `tables/` — result tables and QC outputs
-- `figures/` — Plotly figures and static exports
-- `report.html` — publication-style report
-- `run_metadata.json` — run provenance
-- `analysis_plan.json` — selected mode and preset
-- `warnings.json` — warnings and issues
-- `methods.txt` — methods text for reports
+- `analysis_plan.json` — detected inputs, resolved mode/preset, resolution mode
+- `run_metadata.json` — run provenance and resolved parameters
+- `deconv/` — prediction tables (`proportions.tsv`), selected genes,
+  reconstruction QC, and (hierarchical mode) family/conditional/unresolved tables
+- `qc/` — per-sample/per-spot QC, Moran's I (spatial), and QC recommendations
+- `methods.txt` — auto-generated methods text for the run
+- `warnings.json` — surfaced warnings (estimate type, QC, non-convergence,
+  protocol risk)
+- `report.html` — publication-style report generated from the run result
+  (predictions, QC, methods, warnings populated)
+
+`run` renders `report.html` from the in-memory result and does **not** itself
+write standalone figure files (`figures/*.html` + `.data.tsv`); those richer
+figure outputs are produced by the report layer and the real-data validation
+harness (`examples/real_breast_cancer/scripts/07_generate_reports.py`). You can
+also (re)generate a report from a results directory with `tissueresolve report
+--modality bulk|spatial --results-dir <dir>` (see below).
 
 ## Where are my results?
 
@@ -203,16 +213,22 @@ main report. You should not have to hunt through folders.
 
 ## Reports and figures
 
-The reporting layer embeds:
+The report is split into two files (QC-first, concise):
 
-- executive summary cards
-- key findings and interpretation
-- a main publication figure
-- detailed collapsible outputs
-- warnings and QC notes
+- **`report.html`** — the concise, user-facing report: executive summary →
+  reference/signature QC → input compatibility → resolution/uncertainty → final
+  bulk predictions → final spatial predictions → bulk benchmark → spatial
+  benchmark → warnings → methods/source-data links. One main figure per idea;
+  tables collapsed; warnings summarized.
+- **`technical_appendix.html`** — full separability/spillover heatmaps, spillover
+  networks, spot pies, the large signature heatmap, and the complete source-data
+  listing. The main report links here and back.
 
 Figure outputs include Plotly HTML and, when `kaleido` is installed,
-PDF/SVG/PNG static exports. Every figure writes a `.data.tsv` source data file.
+PDF/SVG/PNG static exports. Every figure writes a `.data.tsv` source data file,
+and `figures/figure_manifest.tsv` maps each figure to its data. See
+[`docs/reporting.md`](docs/reporting.md) and
+[`docs/output_interpretation.md`](docs/output_interpretation.md).
 
 ## Interpretation
 
@@ -301,7 +317,35 @@ See the documentation pages in `docs/`:
 
 ## Status
 
-Research software / pre-release.
+**TissueResolve is currently alpha / early-access research software. It is not
+yet a fully publication-ready method until external benchmarks, multi-dataset
+validation, and final API stabilization are complete.** The priority is to
+stabilize what exists, not to expand the tool.
+
+Research software / pre-release (v0.1). Scope is classified in
+[`docs/V0_1_SCOPE.md`](docs/V0_1_SCOPE.md) and
+[`docs/FEATURE_STATUS.md`](docs/FEATURE_STATUS.md):
+
+- **Core (default-safe):** reference-based bulk & spatial deconvolution,
+  broad/fine hierarchy with unresolved mass, solver `auto`, reference
+  suitability, separability/spillover diagnostics, the QC-first report, and an
+  honest basic benchmark (bulk and spatial kept separate).
+- **Experimental (behind explicit flags; not default; labelled experimental):**
+  state-aware three-level hierarchy (`--state-aware`), granular signatures,
+  spatial multi-metric ranking, external-tool benchmark runners, the composite
+  scorecard, and the synthetic state-aware benchmark.
+- **Deferred / not implemented (do not assume available):** reference
+  adaptation, cell-type-specific expression reconstruction, hyperparameter
+  tuning, and a full BayesPrism-like Bayesian model.
+
+> **Experimental: state-aware deconvolution runs behind `--state-aware`. It is
+> not part of the default v0.1 workflow and has not been validated across real
+> datasets.** State-aware outputs are experimental; full standard-report
+> integration is limited.
+>
+> **Cell-type-specific expression reconstruction is planned/deferred and not
+> implemented in v0.1.** TissueResolve produces RNA-derived composition estimates
+> (cell-type-level deconvolution), not reconstructed per-cell-type expression.
 
 ## License
 

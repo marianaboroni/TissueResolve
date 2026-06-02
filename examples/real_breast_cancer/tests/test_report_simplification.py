@@ -43,39 +43,48 @@ def test_figure_cards_excludes_appendix_from_primary(tmp_path, rep):
     assert "bulk_separability_heatmap" in appendix
 
 
-# --- generated report (skip when not present) -------------------------------
+# --- separate technical appendix file (skip when not generated) -------------
 
-def _section_pos(html):
-    import re
-    return {m.group(1): m.start() for m in re.finditer(r"id='([a-z_]+)'", html)}
+APPENDIX = Path("examples/real_breast_cancer/outputs/technical_appendix.html")
+_HEAVY = ("bulk_separability_heatmap", "bulk_spillover_heatmap",
+          "spatial_separability_heatmap", "spatial_spillover_heatmap",
+          "signature_matrix_heatmap", "spatial_spot_pie_charts")
+
+
+@pytest.mark.skipif(not (REPORT.exists() and APPENDIX.exists()),
+                    reason="report/appendix not generated")
+def test_separate_appendix_exists_and_cross_links():
+    rep = REPORT.read_text()
+    appx = APPENDIX.read_text()
+    assert "technical_appendix.html" in rep        # main → appendix
+    assert "report.html" in appx                   # appendix → main
+
+
+@pytest.mark.skipif(not (REPORT.exists() and APPENDIX.exists()),
+                    reason="report/appendix not generated")
+def test_heavy_figures_in_appendix_not_in_main():
+    rep = REPORT.read_text()
+    appx = APPENDIX.read_text()
+    for stem in _HEAVY:
+        assert stem not in rep, f"{stem} should not be in the main report"
+        assert stem in appx, f"{stem} should be in the technical appendix"
 
 
 @pytest.mark.skipif(not REPORT.exists(), reason="report not generated")
-def test_heavy_figures_in_technical_appendix_not_primary():
+def test_main_report_clean_and_benchmarks_separated():
     html = REPORT.read_text()
-    assert "Technical appendix" in html          # collapsible appendix present
-    pos = _section_pos(html)
-    # each heavy figure sits within its section but AFTER the section's
-    # "Technical appendix"/"exploratory" collapsible marker
-    def in_appendix(stem, sec_a, sec_b, marker):
-        i = html.find(stem)
-        if i < 0:
-            return None
-        # the appendix collapsible marker for this section precedes the figure
-        seg = html[pos.get(sec_a, 0):pos.get(sec_b, len(html))]
-        return (marker in seg) and (seg.find(marker) < seg.find(stem))
-    assert in_appendix("bulk_separability_heatmap", "bulk", "spatial",
-                       "Technical appendix (bulk)")
-    assert in_appendix("spatial_spot_pie_charts", "spatial", "hierarchical",
-                       "Technical / exploratory figures (spatial)")
-
-
-@pytest.mark.skipif(not REPORT.exists(), reason="report not generated")
-def test_no_empty_figure_cards_and_benchmarks_separated():
-    html = REPORT.read_text()
-    assert "fig-body'></div>" not in html
+    assert "fig-body'></div>" not in html                  # no empty cards
+    assert "All source-data tables" not in html            # full dump moved out
     assert "9. Bulk benchmark" in html and "10. Spatial benchmark" in html
-    # spatial benchmark still disclaims accuracy
     i = html.find("id='spatial_benchmark'")
     seg = html[i:i + 4000].lower()
     assert "not accuracy" in seg or "no spot-level ground truth" in seg
+
+
+@pytest.mark.skipif(not REPORT.exists(), reason="report not generated")
+def test_qc_before_predictions_in_main():
+    import re
+    html = REPORT.read_text()
+    pos = {m.group(1): m.start() for m in re.finditer(r"id='([a-z_]+)'", html)}
+    for qc in ("reference", "signature", "input"):
+        assert pos[qc] < pos["bulk"] and pos[qc] < pos["spatial"]

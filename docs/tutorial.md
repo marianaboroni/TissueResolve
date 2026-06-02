@@ -99,11 +99,20 @@ tissueresolve report --modality bulk --results-dir results/bulk
 
 ### What this produces
 
-- `results/bulk/tables/`
-- `results/bulk/figures/`
-- `results/bulk/report.html`
-- `results/bulk/run_metadata.json`
+The `run` step writes the analysis bundle:
+
 - `results/bulk/analysis_plan.json`
+- `results/bulk/run_metadata.json`
+- `results/bulk/deconv/` — `proportions.tsv` (predictions), gene panel, reconstruction QC
+- `results/bulk/qc/` — QC metrics, recommendations
+- `results/bulk/methods.txt` — auto-generated methods text
+- `results/bulk/warnings.json` — surfaced warnings
+- `results/bulk/report.html` — report generated from the run result
+
+`run` renders `report.html` from the in-memory result; standalone figure files
+(`figures/*.html` + `.data.tsv`) are produced by the report layer / validation
+harness. You can also (re)generate a report from a results directory with the
+`tissueresolve report` step (next).
 
 ## 7. Spatial analysis step-by-step
 
@@ -148,15 +157,19 @@ The report includes:
 
 ## 9. Understanding output folders
 
-A typical run writes:
+A `tissueresolve run` writes:
 
-- `tables/` — TSV summary tables, QC metrics, and diagnostic reports
-- `figures/` — Plotly figures and static exports
-- `report.html` — publication-style report
+- `analysis_plan.json` — the planned modality, preset, and resolution mode
 - `run_metadata.json` — resolved parameters and provenance
-- `analysis_plan.json` — the planned modality and preset
-- `warnings.json` — warnings raised during the run
-- `methods.txt` — methods text for reports
+- `deconv/` — `proportions.tsv` predictions, gene panel, reconstruction QC
+- `qc/` — QC metrics, recommendations, Moran's I (spatial)
+- `methods.txt` — auto-generated methods text
+- `warnings.json` — surfaced warnings
+- `report.html` — report generated from the run result
+
+The report layer / validation harness additionally produce `tables/` and
+`figures/` (each with a `.data.tsv`). `report.html` can also be (re)generated
+from a results directory with `tissueresolve report` (above).
 
 ## 10. Understanding figures
 
@@ -301,14 +314,17 @@ asking you to set `--broad-cell-type-col` / `--fine-cell-type-col` or provide
 
 ### Example commands
 
-Bulk, flat:
+Bulk, flat (fine-only — request it explicitly):
 
 ```bash
-tissueresolve bulk run \
-  --reference reference.h5ad --bulk bulk_counts.tsv \
-  --cell-type-col sub_cell_type --resolution-mode none \
+tissueresolve run --mode bulk \
+  --reference reference.h5ad --query bulk_counts.tsv \
+  --resolution-mode flat \
   --out results/bulk_flat
 ```
+
+> `tissueresolve bulk run` is an unimplemented stub; use `tissueresolve run
+> --mode bulk` for bulk deconvolution.
 
 Bulk, hierarchical:
 

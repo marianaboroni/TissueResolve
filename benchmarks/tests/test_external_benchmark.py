@@ -15,6 +15,33 @@ import pandas as pd
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_external_boundary(monkeypatch):
+    """Keep this offline suite truly offline + fast.
+
+    ``run_real_external_benchmark`` probes/invokes external tools via
+    ``Rscript`` and Python runner scripts.  On a machine where R *is* installed
+    (locally, not CI) the dry-run availability probe and ``_invoke`` spend their
+    full subprocess timeouts (R startup × many tools × 120–1800 s), which hangs
+    the default test suite.  Neutralise that boundary here so no test ever shells
+    out — the harness's offline bookkeeping is what these tests actually cover.
+    """
+    try:
+        from benchmarks import run_real_external_benchmark as R
+    except Exception:
+        yield
+        return
+    monkeypatch.setattr(R, "_r_available", lambda: False, raising=False)
+    monkeypatch.setattr(R, "_r_pkg_installed", lambda pkg: False, raising=False)
+    monkeypatch.setattr(
+        R, "_invoke",
+        lambda *a, **k: {"status": "skipped", "error": "offline test"},
+        raising=False)
+    monkeypatch.setattr(R.ENV, "python_module_available",
+                        lambda name: False, raising=False)
+    yield
+
+
 # --- composite score --------------------------------------------------------
 
 def _status_frame():

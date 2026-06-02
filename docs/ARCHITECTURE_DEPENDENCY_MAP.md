@@ -211,3 +211,40 @@ chain, `bulk/*` (pipeline/solver/qc/hierarchical), `spatial/*`
 `benchmark/spillover.py`, `protocol/*`, and the report/plotting foundation
 modules (`export`, `style`, `palette`, `captions`, `components`, `methods_text`,
 `interpretation`, `glossary`, `html`).
+
+---
+
+## Current naming caveats and planned cleanup (v0.1 stabilization)
+
+These are documented now; the structural moves are deferred to a later refactor
+(see `V0_1_PRUNING_PLAN.md`) to avoid risky churn in v0.1.
+
+- **Core no longer imports `benchmarks/`.** The former back-edge
+  (`reference/suitability.py` → `benchmarks.shared.batch_effects`) was removed:
+  the utility now lives at `src/tissueresolve/diagnostics/batch_effects.py`, and
+  `benchmarks/shared/batch_effects.py` is a thin re-export for back-compat. An
+  import-guard test enforces that no `src/tissueresolve/` module imports from the
+  top-level `benchmarks/` tree.
+- **`validation/` vs `io/validation.py`:** `io/validation.py` does input
+  validation; `validation/gene_masking.py` powers solver auto-selection; the
+  `validation/` package is otherwise an empty shell. *Planned:* move
+  `gene_masking.py` → `solver/` and dissolve `validation/`.
+- **`src/tissueresolve/benchmark/` vs top-level `benchmarks/`:** the in-package
+  `benchmark/` holds package diagnostics (e.g. `spillover.py`); the top-level
+  `benchmarks/` is the dev benchmark harness. *Planned:* rename the in-package
+  `benchmark/` → `diagnostics/` (note: `diagnostics/` now also holds
+  `batch_effects.py`, so the spillover relocation will join it).
+
+## Canonical report path vs deprecated modules
+
+- **Canonical (use for new work):** `report/unified.py` (`build_unified_report`,
+  `Section`) + `report/components.py` + `report/style.py` + `report/figures.py` +
+  `report/glossary.py` + `report/interpretation.py` + `report/methods_text.py` +
+  `report/html.py`. This produces the concise `report.html` **and** the separate
+  `technical_appendix.html`.
+- **Deprecated (do not extend; not deleted yet):** `report/sections.py`,
+  `report/templates.py`, `report/assets.py` — the legacy results-directory path
+  that still generates the per-modality `bulk/report.html` / `spatial/report.html`
+  sub-reports (still imported by `report/__init__.py:generate_report`). Each
+  carries a `.. deprecated::` docstring note. *Planned:* consolidate onto the
+  unified path, then quarantine these.
