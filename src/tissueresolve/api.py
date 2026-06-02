@@ -144,7 +144,6 @@ def deconv_bulk(
     from tissueresolve.bulk.hierarchical import run_hierarchical_bulk
     from tissueresolve.reference.hierarchy import build_cell_type_hierarchy
 
-    mapping = build_cell_type_hierarchy(list(ref.cell_types), hierarchy_mapping)
     hcfg = getattr(cfg, "hierarchical", None)
     gate = dict(
         allow_unresolved=getattr(hcfg, "allow_unresolved", True),
@@ -162,36 +161,50 @@ def deconv_bulk(
             gate[_k] = kwargs.pop(_k)
 
     # ---- experimental state-aware (broad → cell type → state) mode ----
+    # Routed BEFORE building the fine→broad mapping: with state labels the
+    # reference's cell_types are *states*, so the cell_type→broad mapping comes
+    # from the raw hierarchy_mapping, not from build_cell_type_hierarchy(states).
     if state_aware:
         return _run_state_aware_bulk(
-            bulk, ref, mapping, cfg, gate,
+            bulk, ref, hierarchy_mapping, cfg, gate,
             reference_adata=reference_adata, state_to_celltype=state_to_celltype,
             broad_col=broad_col, cell_type_col=cell_type_col, state_col=state_col,
             **kwargs)
 
+    mapping = build_cell_type_hierarchy(list(ref.cell_types), hierarchy_mapping)
     return run_hierarchical_bulk(bulk, ref, mapping, config=cfg, **gate, **kwargs)
 
 
-def _run_state_aware_bulk(bulk, ref, mapping, cfg, gate, *, reference_adata=None,
-                          state_to_celltype=None, broad_col=None,
-                          cell_type_col=None, state_col=None, **kwargs):
+def _run_state_aware_bulk(bulk, ref, hierarchy_mapping, cfg, gate, *,
+                          reference_adata=None, state_to_celltype=None,
+                          broad_col=None, cell_type_col=None, state_col=None,
+                          **kwargs):
     """Route to the experimental state-aware 3-level solver (default off).
 
-    When no state labels exist (no ``state_to_celltype`` / ``state_col``), runs
-    a two-level fallback (broad → cell type) and records ``fallback_reason``.
-    Granular gene panels are built only when a ``reference_adata`` (per-cell) is
-    provided; otherwise global genes are used (recorded honestly).
+    When state labels exist, the ``cell_type → broad`` mapping is the raw
+    *hierarchy_mapping* (the reference's ``cell_types`` are then *states*, so the
+    broad mapping cannot be derived from them).  When no state labels exist, runs
+    a two-level fallback (broad → cell type) built from the reference cell types
+    and records ``fallback_reason``.  Granular gene panels are built only when a
+    ``reference_adata`` (per-cell) is provided.
     """
     import warnings as _warnings
     from tissueresolve.bulk.state_aware_hierarchical import (
         run_state_aware_hierarchical_bulk)
+    from tissueresolve.reference.hierarchy import build_cell_type_hierarchy
     from tissueresolve.reference.three_level_hierarchy import (
         build_three_level_hierarchy, build_three_level_from_two_level)
 
     fallback_reason = None
     if state_to_celltype:
-        hierarchy = build_three_level_hierarchy(state_to_celltype, mapping)
+        if not hierarchy_mapping:
+            raise ValueError(
+                "state_aware=True with state_to_celltype requires a "
+                "hierarchy_mapping (cell_type→broad).")
+        hierarchy = build_three_level_hierarchy(state_to_celltype,
+                                                dict(hierarchy_mapping))
     else:
+        mapping = build_cell_type_hierarchy(list(ref.cell_types), hierarchy_mapping)
         hierarchy = build_three_level_from_two_level(mapping)
         fallback_reason = ("no state labels available; running broad→cell_type "
                            "two-level fallback (no third-level states)")
