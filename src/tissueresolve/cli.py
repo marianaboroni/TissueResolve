@@ -57,9 +57,11 @@ def cli() -> None:
 @click.option("--allow-unresolved/--no-allow-unresolved", default=True,
               help="Keep non-separable families at the broad level as unresolved mass.")
 @click.option("--state-aware", is_flag=True, default=False,
-              help="EXPERIMENTAL: broad→cell-type→state hierarchical deconvolution "
-                   "(requires --resolution-mode hierarchical). Falls back to a "
-                   "two-level broad→cell-type run when no state labels exist.")
+              help="EXPERIMENTAL: state-aware broad→cell-type→state hierarchical "
+                   "deconvolution (requires --resolution-mode hierarchical). It is "
+                   "NOT part of the default v0.1 workflow and has not been "
+                   "validated across real datasets. Falls back to a two-level "
+                   "broad→cell-type run when no state labels exist.")
 @click.option("--solver",
               type=click.Choice(["auto", "nnls", "weighted_nnls", "marker_nnls",
                                  "ridge_nnls", "ensemble_nnls", "pipeline"]),
@@ -220,6 +222,11 @@ def _run_top_level(
     except Exception:
         pass
     (outp / "run_metadata.json").write_text(json.dumps(run_metadata, indent=2, default=str))
+
+    # Report bundle: methods.txt, warnings.json, report.html (state-aware uses a
+    # different result shape and writes its own outputs, so skip it here).
+    if not state_aware_effective and hasattr(result, "deconv"):
+        _write_run_report_bundle(result, outp, resolved_mode)
 
     _print_summary_table(
         [
@@ -512,6 +519,72 @@ def _execute_spatial(reference: str, query: str, outp: Path, cfg, resolution_mod
         from tissueresolve.spatial.hierarchical import save_hierarchical_spatial_outputs
         save_hierarchical_spatial_outputs(result, outp / "hierarchical")
     return result
+
+
+def _collect_run_warnings(result, modality: str) -> list[dict[str, str]]:
+    """Collect human-readable warnings from a finished run for ``warnings.json``.
+
+    Warnings are surfaced, never hidden (CLAUDE.md rule 2): the estimate-type
+    caveat is always recorded, plus QC recommendations, non-convergence
+    (spatial), and protocol risk when present.
+    """
+    warns: list[dict[str, str]] = []
+    if modality == "bulk":
+        warns.append({"severity": "info", "category": "estimate_type",
+                      "message": "Estimates are RNA-derived mRNA proportions, "
+                                 "not absolute cell fractions."})
+    else:
+        warns.append({"severity": "info", "category": "estimate_type",
+                      "message": "Estimates are spot-level RNA-derived "
+                                 "composition, not single-cell counts."})
+    qc = getattr(result, "qc", None)
+    for rec in (getattr(qc, "recommendations", None) or []):
+        warns.append({"severity": "warning", "category": "qc", "message": str(rec)})
+    deconv = getattr(result, "deconv", None)
+    if modality == "spatial" and deconv is not None and \
+            getattr(deconv, "converged", True) is False:
+        warns.append({"severity": "error", "category": "convergence",
+                      "message": f"Spatial solver did not converge within "
+                                 f"{getattr(deconv, 'n_iter', '?')} iterations."})
+    risk = getattr(result, "protocol_risk", None)
+    if risk is not None and getattr(risk, "risk_level", None) not in (None, "low"):
+        warns.append({"severity": "warning", "category": "protocol_risk",
+                      "message": f"Protocol risk level: "
+                                 f"{getattr(risk, 'risk_level', 'unknown')}."})
+    return warns
+
+
+def _write_run_report_bundle(result, outp: Path, modality: str) -> None:
+    """Write methods.txt, warnings.json and report.html for a finished run.
+
+    Uses the in-memory result (no new figures are rendered): predictions, QC,
+    methods and warnings are populated from the pipeline result.  Failures here
+    never abort a successful deconvolution — they are reported, not hidden.
+    """
+    from tissueresolve.report import methods_text as _mt
+
+    # methods.txt
+    try:
+        methods = (_mt.compose_bulk_methods(result) if modality == "bulk"
+                   else _mt.compose_spatial_methods(result))
+        (outp / "methods.txt").write_text(methods, encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001
+        click.echo(f"  warning: could not write methods.txt: {exc}", err=True)
+
+    # warnings.json
+    try:
+        warns = _collect_run_warnings(result, modality)
+        (outp / "warnings.json").write_text(
+            json.dumps(warns, indent=2), encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001
+        click.echo(f"  warning: could not write warnings.json: {exc}", err=True)
+
+    # report.html (from the in-memory result → populated predictions + QC)
+    try:
+        from tissueresolve.report import generate_report
+        generate_report(modality, result, out=outp / "report.html")
+    except Exception as exc:  # noqa: BLE001
+        click.echo(f"  warning: could not generate report.html: {exc}", err=True)
 
 
 def _print_summary_table(rows: list[tuple[str, Any]]) -> None:

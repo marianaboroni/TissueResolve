@@ -385,14 +385,14 @@ def generate_report(
     the embedded ``deconv`` estimate type).  Extra kwargs (``separability``,
     ``figures``, ``output_files`` …) are forwarded to the report generator.
     """
-    from tissueresolve.report import html
+    from tissueresolve.report import orchestration
     from tissueresolve.results import BulkDeconvResult, SpatialDeconvResult
 
     deconv = getattr(result, "deconv", None)
     if isinstance(deconv, BulkDeconvResult):
-        return html.generate_bulk_report(result, output_path, **kwargs)
+        return orchestration.generate_bulk_report(result, output_path, **kwargs)
     if isinstance(deconv, SpatialDeconvResult):
-        return html.generate_spatial_report(result, output_path, **kwargs)
+        return orchestration.generate_spatial_report(result, output_path, **kwargs)
     raise TypeError(
         "generate_report: result must be a BulkPipelineResult or "
         "SpatialPipelineResult (with a .deconv result object)."

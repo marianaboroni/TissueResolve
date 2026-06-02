@@ -1,16 +1,19 @@
 """
-Self-contained HTML report generation for TissueResolve (bulk + spatial).
+In-memory result section builders + deprecated public report shims.
 
-The report is plain f-string HTML with embedded CSS (no Jinja2 required).
-Design rules enforced here:
+.. deprecated::
+    The public ``generate_report`` / ``generate_bulk_report`` /
+    ``generate_spatial_report`` here are thin shims that delegate to the
+    canonical :mod:`tissueresolve.report.orchestration` layer (which renders
+    every report through the unified single-page shell).  New code should call
+    :func:`tissueresolve.report.generate_report`.
 
-* **Warnings are surfaced, never hidden.**  A prominent warning box at the top
-  lists the estimate-type caveat plus every QC recommendation, non-convergence,
-  protocol-risk and separability problem.
-* **Failed checks are shown**, not omitted (e.g. ``converged = False`` is
-  rendered in red).
-* Figures are embedded as base64 PNG with their captions, so the HTML is
-  self-contained.
+This module still hosts the **in-memory result** section builders
+(:func:`bulk_result_sections`, :func:`spatial_result_sections`) and the shared
+HTML helpers they use; ``orchestration`` imports those to build the unified
+report from a pipeline result.  Design rules preserved: warnings are surfaced
+(never hidden), failed checks are shown (e.g. ``converged = False``), and the
+estimate-type caveat leads every report.
 """
 from __future__ import annotations
 
@@ -23,77 +26,40 @@ import pandas as pd
 
 from tissueresolve.report import methods_text as _mt
 
-__all__ = ["generate_bulk_report", "generate_spatial_report", "generate_report"]
-
-_CSS = """
-body { font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-       margin: 0 auto; max-width: 980px; padding: 24px; color: #1a1a1a; }
-h1 { border-bottom: 2px solid #4C72B0; padding-bottom: 6px; }
-h2 { margin-top: 28px; color: #2a2a2a; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
-table { border-collapse: collapse; margin: 8px 0; font-size: 13px; }
-th, td { border: 1px solid #ccc; padding: 4px 8px; text-align: right; }
-th { background: #f0f3f8; }
-td:first-child, th:first-child { text-align: left; }
-.warnbox { background: #fff4e5; border: 1px solid #dd8452; border-radius: 6px;
-           padding: 12px 16px; margin: 16px 0; }
-.warnbox h2 { color: #b35900; border: none; margin-top: 0; }
-.warn { color: #b35900; }
-.fail { color: #c0392b; font-weight: bold; }
-.ok { color: #1e7e34; font-weight: bold; }
-.estimate { background: #eef3fb; border-left: 4px solid #4C72B0; padding: 8px 12px;
-            margin: 12px 0; font-size: 14px; }
-.caption { font-size: 12px; color: #555; margin: 4px 0 18px; }
-.meta { font-family: monospace; font-size: 12px; }
-img { max-width: 100%; border: 1px solid #eee; }
-ul { font-size: 13px; }
-"""
+__all__ = [
+    "generate_bulk_report", "generate_spatial_report", "generate_report",
+    "bulk_result_sections", "spatial_result_sections", "assets_read_metadata",
+]
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# Public API (deprecated shims → orchestration)
 # ---------------------------------------------------------------------------
 
 
-def generate_bulk_report(
-    source: Any,  # BulkPipelineResult OR results-directory path
-    output_path: Union[str, Path, None] = None,
-    *,
-    out: Union[str, Path, None] = None,
-    run_metadata: Optional[dict] = None,
-    warnings: Optional[list] = None,
-    separability: Any = None,
-    figures: Optional[Sequence[Any]] = None,
-    output_files: Optional[Iterable[Union[str, Path]]] = None,
-    methods: Optional[str] = None,
-    title: str = "TissueResolve — Bulk deconvolution report",
-) -> Path:
-    """Write a bulk HTML report.
+def generate_bulk_report(source: Any, output_path: Union[str, Path, None] = None,
+                         *, out: Union[str, Path, None] = None, **kwargs: Any) -> Path:
+    """Deprecated shim — delegates to the canonical orchestration layer.
 
-    Dispatches on *source*: a path/str is treated as a **results directory**
-    (reads ``tables/`` + ``figures/`` and embeds them); a pipeline-result
-    object uses the in-memory renderer.
+    Kept for backward compatibility; new code should call
+    :func:`tissueresolve.report.generate_report`.
     """
-    out_path = output_path or out
-    if isinstance(source, (str, Path)):
-        return _generate_report_from_dir(
-            source, out_path, modality="bulk", title=title,
-            run_metadata=run_metadata, warnings=warnings)
-    return _generate_bulk_report_from_result(
-        source, out_path, separability=separability, figures=figures,
-        output_files=output_files, methods=methods, title=title)
+    from tissueresolve.report.orchestration import generate_report as _gen
+    return _gen("bulk", source, output_path, out=out, **kwargs)
 
 
-def _generate_bulk_report_from_result(
+def bulk_result_sections(
     result: Any,
-    output_path: Union[str, Path],
     *,
     separability: Any = None,
     figures: Optional[Sequence[Any]] = None,
     output_files: Optional[Iterable[Union[str, Path]]] = None,
     methods: Optional[str] = None,
-    title: str = "TissueResolve — Bulk deconvolution report",
-) -> Path:
-    """Write a self-contained bulk HTML report.  Returns the written path."""
+    fig_dir: Optional[Path] = None,
+) -> list[tuple[str, str]]:
+    """Build the ordered ``(title, body_html)`` sections for a bulk in-memory
+    result.  Rendering (page shell) is handled by the canonical orchestration
+    layer; this function only assembles content."""
     deconv = result.deconv
     qc = getattr(result, "qc", None)
     meta = getattr(result, "run_metadata", {}) or {}
@@ -101,100 +67,81 @@ def _generate_bulk_report_from_result(
 
     warnings = _collect_bulk_warnings(deconv, qc, risk, separability)
 
-    parts: list[str] = []
-    parts.append(_estimate_box(
+    secs: list[tuple[str, str]] = []
+    secs.append(("Estimate type", _estimate_box(
         "These are <b>RNA-derived mRNA proportions</b>, <b>not</b> absolute "
-        "cell fractions."
-    ))
-    parts.append(_warning_box(warnings))
+        "cell fractions.")))
+    secs.append(("Warnings", _warning_box(warnings)))
 
     res_html = _resolution_mode_html(result)
     if res_html is not None:
-        parts.append(_section("Resolution mode", res_html))
-    parts.append(_section("Input summary", _kv_table({
+        secs.append(("Resolution mode", res_html))
+    secs.append(("Input summary", _kv_table({
         "samples": deconv.n_samples,
         "cell types": deconv.n_cell_types,
         "panel genes": len(deconv.gene_panel),
         "reference genes": meta.get("n_reference_genes", "—"),
     })))
-    parts.append(_section("Reference summary", _kv_table({
+    secs.append(("Reference summary", _kv_table({
         "cell types": deconv.n_cell_types,
         "genome": meta.get("genome", "—"),
         "donor-aware": meta.get("donor_aware", "—"),
     })))
     if "n_shared_genes" in meta:
-        parts.append(_section("Gene overlap", _kv_table({
+        secs.append(("Gene overlap", _kv_table({
             "shared genes": meta.get("n_shared_genes"),
         })))
     if risk is not None:
-        parts.append(_section("Protocol risk", _kv_table({
+        secs.append(("Protocol risk", _kv_table({
             "risk level": getattr(risk, "risk_level", "unknown"),
             "mismatch types": ", ".join(getattr(risk, "mismatch_types", []) or []) or "—",
             "genes excluded": getattr(risk, "n_genes_excluded", 0),
             "genes down-weighted": len(getattr(risk, "downweighted_genes", []) or []),
         })))
-    parts.append(_section("Selected genes", _gene_list_html(deconv.gene_panel)))
-    parts.append(_section(
+    secs.append(("Selected genes", _gene_list_html(deconv.gene_panel)))
+    secs.append((
         "Deconvolution estimates (mRNA proportions)",
         _df_html(deconv.proportions.round(4))
         + "<h3>Summary</h3>" + _df_html(deconv.summary().round(4)),
     ))
     hier_html = _hierarchical_html(result, "bulk")
     if hier_html is not None:
-        parts.append(_section(
-            "Hierarchical resolution-aware deconvolution", hier_html))
+        secs.append(("Hierarchical resolution-aware deconvolution", hier_html))
     if qc is not None:
-        parts.append(_section("QC metrics", _bulk_qc_html(qc)))
-    parts.append(_section("Uncertainty", _bulk_uncertainty_html(deconv, qc)))
+        secs.append(("QC metrics", _bulk_qc_html(qc)))
+    secs.append(("Uncertainty", _bulk_uncertainty_html(deconv, qc)))
     if separability is not None:
-        parts.append(_section("Separability", _separability_html(separability)))
+        secs.append(("Separability", _separability_html(separability)))
     if figures:
-        parts.append(_section("Figures", _figures_html(figures, Path(output_path).parent)))
+        secs.append(("Figures", _figures_html(figures, fig_dir)))
     if output_files:
-        parts.append(_section("Output files", _file_list_html(output_files)))
-    parts.append(_section("Run metadata", _meta_html(meta)))
+        secs.append(("Output files", _file_list_html(output_files)))
+    secs.append(("Run metadata", _meta_html(meta)))
 
     methods = methods or _mt.compose_bulk_methods(result)
-    parts.append(_section("Methods", f"<p>{_html.escape(methods)}</p>".replace("\n\n", "</p><p>")))
-
-    return _write(output_path, title, parts)
-
-
-def generate_spatial_report(
-    source: Any,  # SpatialPipelineResult OR results-directory path
-    output_path: Union[str, Path, None] = None,
-    *,
-    out: Union[str, Path, None] = None,
-    run_metadata: Optional[dict] = None,
-    warnings: Optional[list] = None,
-    separability: Any = None,
-    figures: Optional[Sequence[Any]] = None,
-    output_files: Optional[Iterable[Union[str, Path]]] = None,
-    methods: Optional[str] = None,
-    title: str = "TissueResolve — Spatial deconvolution report",
-) -> Path:
-    """Write a spatial HTML report (results-dir path or in-memory result)."""
-    out_path = output_path or out
-    if isinstance(source, (str, Path)):
-        return _generate_report_from_dir(
-            source, out_path, modality="spatial", title=title,
-            run_metadata=run_metadata, warnings=warnings)
-    return _generate_spatial_report_from_result(
-        source, out_path, separability=separability, figures=figures,
-        output_files=output_files, methods=methods, title=title)
+    secs.append(("Methods",
+                 f"<p>{_html.escape(methods)}</p>".replace("\n\n", "</p><p>")))
+    return secs
 
 
-def _generate_spatial_report_from_result(
+def generate_spatial_report(source: Any, output_path: Union[str, Path, None] = None,
+                            *, out: Union[str, Path, None] = None, **kwargs: Any) -> Path:
+    """Deprecated shim — delegates to the canonical orchestration layer."""
+    from tissueresolve.report.orchestration import generate_report as _gen
+    return _gen("spatial", source, output_path, out=out, **kwargs)
+
+
+def spatial_result_sections(
     result: Any,
-    output_path: Union[str, Path],
     *,
     separability: Any = None,
     figures: Optional[Sequence[Any]] = None,
     output_files: Optional[Iterable[Union[str, Path]]] = None,
     methods: Optional[str] = None,
-    title: str = "TissueResolve — Spatial deconvolution report",
-) -> Path:
-    """Write a self-contained spatial HTML report.  Returns the written path."""
+    fig_dir: Optional[Path] = None,
+) -> list[tuple[str, str]]:
+    """Build the ordered ``(title, body_html)`` sections for a spatial in-memory
+    result.  Content only; rendering is handled by the orchestration layer."""
     deconv = result.deconv
     meta = getattr(result, "run_metadata", {}) or {}
     morans = getattr(result, "morans_i", None)
@@ -202,46 +149,45 @@ def _generate_spatial_report_from_result(
 
     warnings = _collect_spatial_warnings(result, deconv, separability)
 
-    parts: list[str] = []
-    parts.append(_estimate_box(
+    secs: list[tuple[str, str]] = []
+    secs.append(("Estimate type", _estimate_box(
         "These are <b>spot-level RNA-derived composition estimates</b>, "
-        "<b>not</b> direct single-cell counts."
-    ))
-    parts.append(_warning_box(warnings))
+        "<b>not</b> direct single-cell counts.")))
+    secs.append(("Warnings", _warning_box(warnings)))
 
     res_html = _resolution_mode_html(result)
     if res_html is not None:
-        parts.append(_section("Resolution mode", res_html))
-    parts.append(_section("Input summary", _kv_table({
+        secs.append(("Resolution mode", res_html))
+    secs.append(("Input summary", _kv_table({
         "spots": deconv.n_spots,
         "cell types": deconv.n_cell_types,
         "marker genes": len(deconv.marker_genes),
     })))
-    parts.append(_section("Reference summary", _kv_table({
+    secs.append(("Reference summary", _kv_table({
         "cell types": deconv.n_cell_types,
         "genome": meta.get("genome", "—"),
     })))
     if "n_genes_panel" in meta or "n_shared_genes" in meta:
-        parts.append(_section("Gene overlap", _kv_table({
+        secs.append(("Gene overlap", _kv_table({
             "shared genes": meta.get("n_shared_genes", "—"),
             "panel genes": meta.get("n_genes_panel", len(deconv.marker_genes)),
         })))
-    parts.append(_section("Spatial graph", _kv_table({
+    secs.append(("Spatial graph", _kv_table({
         "spots": deconv.n_spots,
         "alpha (mix weight)": meta.get("alpha", "—"),
     })))
-    parts.append(_section("Smoothing parameters", _kv_table({
+    secs.append(("Smoothing parameters", _kv_table({
         "lambda_spatial": deconv.lambda_spatial,
         "alpha": meta.get("alpha", "—"),
         "n_smooth (niche)": deconv.n_smooth if deconv.n_smooth is not None else "not applied",
     })))
     conv_cls = "ok" if deconv.converged else "fail"
-    parts.append(_section("Convergence", _kv_table({
+    secs.append(("Convergence", _kv_table({
         "converged": f'<span class="{conv_cls}">{deconv.converged}</span>',
         "iterations": deconv.n_iter,
         "final δΠ": round(deconv.convergence_trace[-1], 6) if deconv.convergence_trace else "—",
     }, raw_values=True)))
-    parts.append(_section(
+    secs.append((
         "Spot-level estimates (RNA-derived composition)",
         f"<p>{deconv.n_spots} spots × {deconv.n_cell_types} cell types. "
         "Full table written to the output directory.</p>"
@@ -251,24 +197,23 @@ def _generate_spatial_report_from_result(
     ))
     hier_html = _hierarchical_html(result, "spatial")
     if hier_html is not None:
-        parts.append(_section(
-            "Hierarchical resolution-aware deconvolution", hier_html))
+        secs.append(("Hierarchical resolution-aware deconvolution", hier_html))
     if spot_qc is not None:
-        parts.append(_section("Spatial QC", _df_html(spot_qc.describe().round(4))))
+        secs.append(("Spatial QC", _df_html(spot_qc.describe().round(4))))
     if morans is not None:
-        parts.append(_section("Moran's I", _df_html(morans.to_frame("morans_i").round(4))))
+        secs.append(("Moran's I", _df_html(morans.to_frame("morans_i").round(4))))
     if separability is not None:
-        parts.append(_section("Separability", _separability_html(separability)))
+        secs.append(("Separability", _separability_html(separability)))
     if figures:
-        parts.append(_section("Figures", _figures_html(figures, Path(output_path).parent)))
+        secs.append(("Figures", _figures_html(figures, fig_dir)))
     if output_files:
-        parts.append(_section("Output files", _file_list_html(output_files)))
-    parts.append(_section("Run metadata", _meta_html(meta)))
+        secs.append(("Output files", _file_list_html(output_files)))
+    secs.append(("Run metadata", _meta_html(meta)))
 
     methods = methods or _mt.compose_spatial_methods(result, separability=separability)
-    parts.append(_section("Methods", f"<p>{_html.escape(methods)}</p>".replace("\n\n", "</p><p>")))
-
-    return _write(output_path, title, parts)
+    secs.append(("Methods",
+                 f"<p>{_html.escape(methods)}</p>".replace("\n\n", "</p><p>")))
+    return secs
 
 
 # ---------------------------------------------------------------------------
@@ -413,24 +358,6 @@ def _collect_spatial_warnings(result, deconv, separability) -> list[str]:
 # ---------------------------------------------------------------------------
 
 
-def _write(output_path, title, parts) -> Path:
-    out = Path(output_path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    doc = (
-        "<!DOCTYPE html><html><head><meta charset='utf-8'>"
-        f"<title>{_html.escape(title)}</title><style>{_CSS}</style></head><body>"
-        f"<h1>{_html.escape(title)}</h1>"
-        + "".join(parts)
-        + "</body></html>"
-    )
-    out.write_text(doc, encoding="utf-8")
-    return out
-
-
-def _section(title: str, body_html: str) -> str:
-    return f"<h2>{_html.escape(title)}</h2>{body_html}"
-
-
 def _estimate_box(html_text: str) -> str:
     return f"<div class='estimate'>⚑ Estimate type: {html_text}</div>"
 
@@ -562,35 +489,6 @@ def _meta_html(meta: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _generate_report_from_dir(
-    results_dir: Union[str, Path],
-    output_path: Union[str, Path, None],
-    *,
-    modality: str,
-    title: str,
-    run_metadata: Optional[dict] = None,
-    warnings: Optional[list] = None,
-) -> Path:
-    """Build a report by reading a results directory's tables/ and figures/."""
-    from tissueresolve.report import sections, templates
-
-    results_dir = Path(results_dir)
-    if run_metadata is None:
-        run_metadata = assets_read_metadata(results_dir)
-    if modality == "bulk":
-        secs = sections.bulk_sections(results_dir, run_metadata=run_metadata,
-                                      warnings=warnings)
-    else:
-        secs = sections.spatial_sections(results_dir, run_metadata=run_metadata,
-                                         warnings=warnings)
-    body, toc = sections.build_sections_html(secs)
-    doc = templates.page(title, body, toc=toc)
-    out = Path(output_path) if output_path else (results_dir / "report.html")
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(doc, encoding="utf-8")
-    return out
-
-
 def assets_read_metadata(results_dir: Path) -> dict:
     from tissueresolve.report import assets
 
@@ -609,13 +507,6 @@ def generate_report(
     out: Union[str, Path, None] = None,
     **kwargs: Any,
 ) -> Path:
-    """Dispatch to the bulk or spatial report generator.
-
-    *modality* is ``"bulk"`` or ``"spatial"``; *source* is a results-directory
-    path or an in-memory pipeline result.
-    """
-    if modality == "bulk":
-        return generate_bulk_report(source, output_path, out=out, **kwargs)
-    if modality == "spatial":
-        return generate_spatial_report(source, output_path, out=out, **kwargs)
-    raise ValueError(f"modality must be 'bulk' or 'spatial', got {modality!r}.")
+    """Deprecated shim — delegates to the canonical orchestration layer."""
+    from tissueresolve.report.orchestration import generate_report as _gen
+    return _gen(modality, source, output_path, out=out, **kwargs)
