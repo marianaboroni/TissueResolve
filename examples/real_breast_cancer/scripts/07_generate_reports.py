@@ -41,6 +41,18 @@ import _harness as H
 # figure grid and shown only in a collapsible technical appendix.
 _SUMMARY_FIGS = {"bulk_main_summary_figure", "spatial_main_summary_figure"}
 
+# Heavy/technical figures kept OUT of the primary grid and shown only in a
+# collapsible technical appendix (report-simplification audit, Part 5):
+# full separability/spillover heatmaps, spillover networks, the signature
+# heatmap and exploratory per-spot pies duplicate or out-detail the cleaner
+# primary plots.
+_BULK_APPENDIX_FIGS = {"bulk_separability_heatmap", "bulk_spillover_heatmap",
+                       "spillover_network", "bulk_main_summary_figure"}
+_SPATIAL_APPENDIX_FIGS = {"spatial_separability_heatmap", "spatial_spillover_heatmap",
+                          "spillover_network", "spatial_spot_pie_charts",
+                          "spatial_main_summary_figure"}
+_SIGNATURE_APPENDIX_FIGS = {"signature_matrix_heatmap"}
+
 
 def _read_tsv(p: Path):
     try:
@@ -1215,10 +1227,22 @@ def generate_unified_report() -> Path:
                 " &nbsp; Hierarchy quality: "
                 f"{C.status_badge(_component_status(suit, 'hierarchy_quality', 'UNKNOWN'))}"
                 "</p>")
-    # Signature-QC figures (heatmap, confusable pairs, within/between, hierarchy,
-    # marker support) — visual summaries before the raw table.
+    # Signature-QC figures (confusable pairs, within/between, hierarchy, marker
+    # support) — visual summaries before the raw table.  The large signature
+    # matrix heatmap is routed to the technical appendix.
     sig += _figure_cards(H.OUTPUTS_DIR / "signature" / "figures", out_dir,
-                         manifest, "signature", _CAPTIONS)
+                         manifest, "signature", _CAPTIONS,
+                         exclude=_SIGNATURE_APPENDIX_FIGS)
+    _sig_appendix = _figure_cards(H.OUTPUTS_DIR / "signature" / "figures", out_dir,
+                                  manifest, "signature", _CAPTIONS,
+                                  only=_SIGNATURE_APPENDIX_FIGS)
+    if _sig_appendix:
+        sig += C.collapsible_table(
+            "Technical appendix (signatures): full signature matrix heatmap",
+            _sig_appendix,
+            note="Large gene × cell-type heatmap moved out of the main view; the "
+                 "confusable-pairs and recommended-resolution summaries above are "
+                 "the actionable views.")
     # Top confusable pairs (compact view; full table is source data)
     sep_p = H.OUTPUTS_DIR / "resolution" / "pairwise_separability.tsv"
     if sep_p.exists():
@@ -1287,14 +1311,15 @@ def generate_unified_report() -> Path:
         "cell fractions.",
     ])
     bulk += _figure_cards(H.OUT_BULK_DIR / "figures", out_dir, manifest, "bulk",
-                          _CAPTIONS, exclude=_SUMMARY_FIGS)
+                          _CAPTIONS, exclude=_SUMMARY_FIGS | _BULK_APPENDIX_FIGS)
     _bulk_appendix = _figure_cards(H.OUT_BULK_DIR / "figures", out_dir, manifest,
-                                   "bulk", _CAPTIONS, only={"bulk_main_summary_figure"})
+                                   "bulk", _CAPTIONS, only=_BULK_APPENDIX_FIGS)
     if _bulk_appendix:
         bulk += C.collapsible_table(
-            "Technical composite diagnostics (bulk)", _bulk_appendix,
-            note="Crowded multi-panel technical summary; the primary figures "
-                 "above present the same information more clearly.")
+            "Technical appendix (bulk): full separability/spillover heatmaps, "
+            "spillover network, composite summary", _bulk_appendix,
+            note="Technical diagnostics moved out of the main view; the primary "
+                 "figures above present the actionable information more clearly.")
     bulk += _df_collapsible("Estimated proportions (source data)",
                             H.OUT_BULK_DIR / "bulk_estimated_proportions.tsv")
     bulk += C.variable_dictionary(G.subset(["mRNA-derived proportion", "coverage R²", "unresolved mass"]))
@@ -1318,15 +1343,18 @@ def generate_unified_report() -> Path:
     ])
     spat += _figure_cards(H.OUT_SPATIAL_DIR / "figures", out_dir, manifest,
                           "spatial", _CAPTIONS,
-                          exclude=_SUMMARY_FIGS | {"spatial_spot_pie_charts"})
+                          exclude=_SUMMARY_FIGS | _SPATIAL_APPENDIX_FIGS)
     _spat_appendix = _figure_cards(
         H.OUT_SPATIAL_DIR / "figures", out_dir, manifest, "spatial", _CAPTIONS,
-        only={"spatial_main_summary_figure", "spatial_spot_pie_charts"})
+        only=_SPATIAL_APPENDIX_FIGS)
     if _spat_appendix:
         spat += C.collapsible_table(
-            "Technical / exploratory figures (spatial)", _spat_appendix,
-            note="Crowded composite summary and exploratory per-spot pies; the "
-                 "primary maps above present the same information more clearly.")
+            "Technical / exploratory figures (spatial): full separability/"
+            "spillover heatmaps, spillover network, composite summary, per-spot pies",
+            _spat_appendix,
+            note="Technical and exploratory figures moved out of the main view; "
+                 "the primary maps above present the actionable information more "
+                 "clearly. Per-spot pies are exploratory only.")
     spat += C.variable_dictionary(G.subset(["entropy", "dominant fraction", "near-zero fraction", "Moran's I"]))
     spat += C.interpretation_guide(
         "Use this section to inspect where predicted RNA-derived compositions "

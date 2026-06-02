@@ -93,7 +93,7 @@ def test_report_has_separate_benchmark_sections():
     assert "10. Spatial benchmark" in html
     assert "Benchmark comparison" not in html          # old combined section gone
     # main summary figures relocated to collapsible technical appendix
-    assert "Technical composite diagnostics (bulk)" in html
+    assert "Technical appendix (bulk)" in html   # main-summary + heavy figs relocated
 
 
 @pytest.mark.skipif(not REPORT.exists(), reason="report not generated")
