@@ -12,10 +12,9 @@ Content builders live in the dedicated layers:
 
 * results-directory sections → :mod:`tissueresolve.report.sections`
   (which uses :mod:`tissueresolve.report.interpretation` + ``assets``);
-* in-memory result sections → :func:`tissueresolve.report.html.bulk_result_sections`
-  / :func:`~tissueresolve.report.html.spatial_result_sections`.
+* in-memory result sections → :mod:`tissueresolve.report.result_sections`.
 
-``report/html.py``'s public functions are thin deprecation shims that delegate
+``report/html.py`` is a thin deprecation shim whose public functions delegate
 here, so the project has a single canonical rendering path.
 """
 from __future__ import annotations
@@ -76,21 +75,21 @@ def generate_report(
 
     if isinstance(source, (str, Path)):
         from tissueresolve.report import sections as S
-        from tissueresolve.report.html import assets_read_metadata
+        from tissueresolve.report.result_sections import read_run_metadata
         results_dir = Path(source)
-        meta = run_metadata if run_metadata is not None else assets_read_metadata(results_dir)
+        meta = run_metadata if run_metadata is not None else read_run_metadata(results_dir)
         builder = S.bulk_sections if modality == "bulk" else S.spatial_sections
         secs = builder(results_dir, run_metadata=meta, warnings=warnings)
         out_path = Path(out_path) if out_path else (results_dir / "report.html")
     else:
-        from tissueresolve.report import html as H
+        from tissueresolve.report import result_sections as RS
         if out_path is None:
             raise ValueError(
                 "output_path/out is required when generating a report from an "
                 "in-memory result.")
         out_path = Path(out_path)
-        builder = (H.bulk_result_sections if modality == "bulk"
-                   else H.spatial_result_sections)
+        builder = (RS.bulk_result_sections if modality == "bulk"
+                   else RS.spatial_result_sections)
         secs = builder(source, separability=separability, figures=figures,
                        output_files=output_files, methods=methods,
                        fig_dir=out_path.parent)

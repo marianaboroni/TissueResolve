@@ -14,11 +14,14 @@ Canonical path
 ``sections`` / ``interpretation`` / ``assets``
     Results-directory section builders (content + data-driven prose).
 
+``result_sections``
+    In-memory result section builders (the counterpart of ``sections`` for a
+    pipeline result), consumed by ``orchestration``.
+
 ``html``
     **Deprecated** compatibility shim — its public functions delegate to
-    ``orchestration``.  Still hosts the in-memory result section builders
-    (``bulk_result_sections`` / ``spatial_result_sections``) and shared HTML
-    helpers consumed by ``orchestration``.
+    ``orchestration``; it re-exports the ``result_sections`` builders for
+    backward compatibility only.
 """
 from tissueresolve.report.orchestration import (
     generate_bulk_report,
