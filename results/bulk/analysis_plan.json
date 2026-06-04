@@ -1,0 +1,31 @@
+{
+  "detected_reference": "unknown",
+  "detected_query": "unknown",
+  "mode": "bulk",
+  "requested_resolution_mode": "auto",
+  "resolution_mode": "none",
+  "resolution_mode_reason": "auto: no broad/fine annotations or mapping found; falling back to flat (fine-only).  Provide broad/fine labels or --cell-type-hierarchy to enable the recommended hierarchical broad\u2192fine workflow.",
+  "preset": "standard",
+  "preset_params": {
+    "plots": "standard",
+    "bootstrap": false,
+    "auto_tune": false,
+    "spatial": {
+      "lambda": "auto",
+      "n_neighbors": 8
+    },
+    "hierarchical": {
+      "min_discriminating_genes": 10,
+      "within_family_spillover_threshold": 0.3,
+      "unresolved_threshold": 0.1
+    }
+  },
+  "protocol": {
+    "reference": {},
+    "query": {}
+  },
+  "solver": "auto",
+  "hierarchy_mode": "standard",
+  "state_aware_enabled": false,
+  "state_aware_feature_status": "experimental"
+}

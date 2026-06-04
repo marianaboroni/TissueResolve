@@ -70,10 +70,14 @@ def cli() -> None:
                    "'pipeline' uses the protocol-aware weighted pipeline.")
 @click.option("--preset", type=click.Choice(["quick", "standard", "publication", "diagnostic"]), default="standard")
 @click.option("--dry-run", is_flag=True, default=False)
+@click.option("--force", is_flag=True, default=False,
+              help="Allow writing into an output directory that already holds a "
+                   "run of a DIFFERENT modality (overwrites it).  By default such "
+                   "a cross-modality overwrite is refused.")
 def run_cli(reference: str, query: str, out: str, mode: str, resolution_mode: str,
             broad_cell_type_col: str, fine_cell_type_col: str,
             hierarchy_path: str | None, allow_unresolved: bool, state_aware: bool,
-            solver: str, preset: str, dry_run: bool) -> None:
+            solver: str, preset: str, dry_run: bool, force: bool) -> None:
     """User-friendly top-level run: auto-detect inputs, write analysis plan, optionally run pipelines."""
     rc = _run_top_level(
         reference, query, out, mode, preset, resolution_mode,
@@ -84,9 +88,55 @@ def run_cli(reference: str, query: str, out: str, mode: str, resolution_mode: st
         state_aware=state_aware,
         solver=solver,
         dry_run=dry_run,
+        force=force,
     )
     if rc != 0:
         raise click.ClickException(f"tissueresolve run failed with code {rc}")
+
+
+def _prior_run_modality(outp: Path) -> str | None:
+    """Return the modality (``"bulk"``/``"spatial"``) of a previous run in *outp*,
+    read from ``analysis_plan.json`` or ``run_metadata.json`` — or ``None`` if the
+    directory holds no recognisable prior run."""
+    for name in ("analysis_plan.json", "run_metadata.json"):
+        p = outp / name
+        if not p.exists():
+            continue
+        try:
+            data = json.loads(p.read_text())
+        except Exception:
+            continue
+        mode = data.get("mode")
+        if mode is None and isinstance(data.get("analysis_plan"), dict):
+            mode = data["analysis_plan"].get("mode")
+        if mode in ("bulk", "spatial"):
+            return mode
+    return None
+
+
+def _guard_output_modality(outp: Path, resolved_mode: str, force: bool) -> None:
+    """Refuse to silently overwrite a different-modality run in *outp*.
+
+    One ``tissueresolve run`` processes one modality.  Writing a spatial run on
+    top of a bulk run (or vice-versa) would clobber ``report.html``, ``deconv/``,
+    ``qc/`` and the JSON/methods/warnings files.  Same-modality re-runs are
+    allowed (they intentionally refresh the directory); cross-modality writes
+    require an explicit ``--force``.
+    """
+    prior = _prior_run_modality(outp)
+    if prior is None or prior == resolved_mode or force:
+        return
+    raise click.ClickException(
+        f"Output directory {str(outp)!r} already contains a {prior!r} run, but "
+        f"this is a {resolved_mode!r} run.  One `tissueresolve run` processes a "
+        "single modality, and writing here would overwrite the existing "
+        f"{prior!r} results (report.html, deconv/, qc/, *.json, methods.txt, "
+        "warnings.json).\n"
+        "Use separate output directories, e.g.:\n"
+        "  results/bulk    (--mode bulk)\n"
+        "  results/spatial (--mode spatial)\n"
+        "then combine them with `tissueresolve combine-report`.\n"
+        "Pass --force to intentionally overwrite this directory.")
 
 
 def _run_top_level(
@@ -104,6 +154,7 @@ def _run_top_level(
     state_aware: bool = False,
     solver: str = "auto",
     dry_run: bool = False,
+    force: bool = False,
 ) -> int:
     outp = Path(out)
     outp.mkdir(parents=True, exist_ok=True)
@@ -132,6 +183,9 @@ def _run_top_level(
             raise ValueError(
                 "Could not auto-detect query mode; use --mode to specify 'bulk' or 'spatial'."
             )
+
+    # Refuse to silently overwrite a different-modality run in this directory.
+    _guard_output_modality(outp, resolved_mode, force)
 
     # Resolve the requested resolution mode to a concrete one (auto → hierarchical
     # when broad/fine labels/mapping are available; else flat-with-caution).
@@ -621,6 +675,7 @@ def run(argv: list | None = None) -> int:
                         default="auto")
     parser.add_argument("--preset", choices=("quick", "standard", "publication", "diagnostic"), default="standard")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--force", action="store_true", default=False)
     args = parser.parse_args(argv)
 
     return _run_top_level(
@@ -636,6 +691,7 @@ def run(argv: list | None = None) -> int:
         allow_unresolved=args.allow_unresolved,
         solver=args.solver,
         dry_run=args.dry_run,
+        force=args.force,
     )
 
 
@@ -988,6 +1044,31 @@ def report(modality: str, results_dir: str, out_path: str | None) -> None:
 
     out = generate_report(modality, results_dir, out_path)
     click.echo(f"Wrote {modality} report -> {out}")
+
+
+@cli.command(name="combine-report")
+@click.option("--bulk-dir", "bulk_dir", required=True, type=click.Path(exists=True),
+              help="An existing `tissueresolve run --mode bulk` output directory.")
+@click.option("--spatial-dir", "spatial_dir", required=True, type=click.Path(exists=True),
+              help="An existing `tissueresolve run --mode spatial` output directory.")
+@click.option("--out", "out_dir", required=True, type=click.Path(file_okay=False),
+              help="Output directory for the combined report bundle.")
+def combine_report(bulk_dir: str, spatial_dir: str, out_dir: str) -> None:
+    """Combine an existing bulk run and an existing spatial run into one report.
+
+    Reads the two run directories (it does NOT re-run deconvolution) and writes
+    ``report.html`` + ``methods.txt`` + ``warnings.json`` + ``run_metadata.json``
+    under ``--out``.  Bulk and spatial sections (and benchmark summaries) are kept
+    separate; the report states it summarises two separate runs sharing a
+    reference, not a single joint model.
+    """
+    from tissueresolve.report.combined import generate_combined_report
+
+    try:
+        out = generate_combined_report(bulk_dir, spatial_dir, out_dir)
+    except ValueError as exc:
+        raise click.ClickException(str(exc))
+    click.echo(f"Wrote combined report -> {out}")
 
 
 # ---------------------------------------------------------------------------

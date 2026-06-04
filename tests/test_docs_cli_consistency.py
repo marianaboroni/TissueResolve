@@ -71,9 +71,25 @@ def test_readme_only_references_real_top_level_commands():
     readme = (_ROOT / "README.md").read_text()
     # collect `tissueresolve <word>` occurrences in fenced/inline code
     cmds = set(re.findall(r"tissueresolve\s+([a-z][a-z\-]*)", readme))
-    valid = {"run", "bulk", "spatial", "report", "info"}
+    valid = {"run", "bulk", "spatial", "report", "info", "combine-report"}
     unknown = cmds - valid
     assert not unknown, f"README references unknown commands: {unknown}"
+
+
+def test_combine_report_command_exists():
+    r = CliRunner().invoke(cli.cli, ["--help"])
+    assert "combine-report" in r.output
+    h = CliRunner().invoke(cli.cli, ["combine-report", "--help"])
+    assert h.exit_code == 0
+    for flag in ("--bulk-dir", "--spatial-dir", "--out"):
+        assert flag in h.output, flag
+
+
+def test_docs_mention_separate_output_dirs():
+    for f in ("README.md", "docs/tutorial.md", "docs/output_interpretation.md"):
+        txt = (_ROOT / f).read_text()
+        assert "results/bulk" in txt and "results/spatial" in txt, f
+        assert "combine-report" in txt, f
 
 
 def test_benchmark_include_imported_flag_registered():

@@ -99,6 +99,12 @@ python -m pip install -e ".[spatial,report,realdata,benchmark]"
 
 ## Quickstart
 
+**One `tissueresolve run` processes one modality** (bulk *or* spatial). To
+analyse both with the same reference, run them into **separate output
+directories** and then merge the summaries with `tissueresolve combine-report`.
+Writing a second, different-modality run into the same `--out` is refused unless
+you pass `--force` (it would overwrite the first run).
+
 ### Bulk
 
 ```bash
@@ -119,6 +125,24 @@ Or use the spatial subcommand:
 tissueresolve spatial run --visium visium.h5ad \
   --reference reference.h5ad --output results/spatial
 ```
+
+### Combined bulk + spatial report
+
+After a separate bulk run and spatial run (sharing one reference), merge them
+into one report:
+
+```bash
+tissueresolve combine-report \
+  --bulk-dir results/bulk --spatial-dir results/spatial \
+  --out results/combined
+```
+
+This reads the two existing run directories (it does **not** re-run
+deconvolution) and writes `results/combined/report.html` (+ `methods.txt`,
+`warnings.json`, `run_metadata.json`). Bulk and spatial sections — and any
+benchmark summaries — are kept **separate**, and the report states clearly that
+it summarises two separate runs sharing a reference, **not** a single joint
+bulk+spatial model.
 
 ### Hierarchical (broad → fine) deconvolution
 
@@ -164,11 +188,16 @@ tissueresolve report --modality spatial --results-dir results/spatial
 - `tissueresolve run`
 - `tissueresolve spatial run`
 - `tissueresolve report`
+- `tissueresolve combine-report` — merge an existing bulk run + spatial run into one report
 - `tissueresolve bulk report`
 - `tissueresolve spatial report`
 
 > Note: `tissueresolve bulk run` is present in the CLI tree but not yet
 > implemented; use `tissueresolve run --mode bulk` instead.
+>
+> One `run` processes one modality. Use **separate output directories** for bulk
+> and spatial; do not write both to the same `--out` (a cross-modality write is
+> refused unless you pass `--force`). Use `combine-report` for a unified summary.
 
 ## Outputs
 
