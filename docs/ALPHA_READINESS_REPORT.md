@@ -64,16 +64,17 @@ methods/warnings are populated), `methods.txt`, and `warnings.json` directly.
 `render_sections()`), which renders every report — CLI `report`,
 `bulk/spatial report`, `tissueresolve run`, and `api.generate_report` — through
 the unified single-page shell from either a results directory or an in-memory
-result. `report/html.py`'s public functions are deprecation shims; its duplicate
-page renderers were removed. `sections.py`/`assets.py`/`interpretation.py` are
-the results-dir content layer for the canonical path. See
+result. `report/html.py` is now a **pure compatibility shim** (deprecated public
+functions delegating to `orchestration`, plus backward-compat re-exports); its
+in-memory section builders were relocated to `report/result_sections.py`.
+`sections.py`/`result_sections.py` are the content layer (results-dir and
+in-memory respectively) for the canonical path. See
 `docs/REPORT_PATH_CONSOLIDATION_PLAN.md`.
 
 **Remaining gap:** `run` still does not write standalone figure files
 (`figures/*.html` + `.data.tsv`) — those come from the report layer / harness
-(the chosen scope was "no new figures"). Fully deleting `html.py` (vs the
-current shim) would require relocating its in-memory section builders — an
-optional further cleanup.
+(the chosen scope was "no new figures"). `html.py` now holds no report logic of
+its own and can be deleted once external callers stop importing it directly.
 
 ## 7. Documentation status
 

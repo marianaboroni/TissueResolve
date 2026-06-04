@@ -138,6 +138,36 @@ tissueresolve spatial run --visium visium.h5ad \
 tissueresolve report --modality spatial --results-dir results/spatial
 ```
 
+## 7b. Analysing both bulk and spatial (separate runs, one reference)
+
+A single `tissueresolve run` processes **one** modality. To analyse bulk and
+spatial with the same reference, run them into **separate output directories**:
+
+```bash
+tissueresolve run --reference ref.h5ad --query bulk.tsv \
+  --out results/bulk --mode bulk
+tissueresolve run --reference ref.h5ad --query visium.h5ad \
+  --out results/spatial --mode spatial
+```
+
+Do **not** write both to the same `--out` — the second run would overwrite the
+first, so a cross-modality write into a non-empty run directory is **refused**
+unless you pass `--force` (an intentional overwrite). Same-modality re-runs into
+the same directory are allowed (they refresh it).
+
+Merge the two runs into a single report (no re-running of deconvolution):
+
+```bash
+tissueresolve combine-report \
+  --bulk-dir results/bulk --spatial-dir results/spatial \
+  --out results/combined
+```
+
+This writes `results/combined/report.html` (+ `methods.txt`, `warnings.json`,
+`run_metadata.json`), keeps bulk and spatial sections (and benchmark summaries)
+separate, and states that it summarises two separate runs sharing a reference —
+not a single joint bulk+spatial model.
+
 ## 8. Generating HTML reports
 
 The root report command reads a results directory and writes a self-contained

@@ -47,6 +47,31 @@ tissueresolve report --modality bulk --results-dir results/bulk
 tissueresolve report --modality spatial --results-dir results/spatial
 ```
 
+## Combined bulk + spatial report
+
+One `tissueresolve run` processes one modality, written to its own directory.
+To present bulk and spatial together (they share a reference), merge two
+existing run directories:
+
+```bash
+tissueresolve combine-report \
+  --bulk-dir results/bulk --spatial-dir results/spatial \
+  --out results/combined
+```
+
+`combine-report` reads the two run directories (no re-running of deconvolution)
+and writes `results/combined/report.html`, `methods.txt`, `warnings.json` and
+`run_metadata.json`. Sections: (1) executive summary, (2) shared reference
+summary (when metadata is available), (3) bulk QC and predictions, (4) spatial
+QC and predictions, (5) bulk benchmark summary, (6) spatial benchmark summary,
+(7) warnings and limitations (bulk and spatial warnings, attributed), (8)
+methods and source-data links back to each run directory. Bulk and spatial — and
+their benchmark summaries — are kept **separate**; the combined `warnings.json`
+includes both runs' warnings tagged by modality. The report states explicitly
+that it summarises two separate runs sharing a reference, **not** a single joint
+bulk+spatial model. It validates that `--bulk-dir` is a bulk run and
+`--spatial-dir` is a spatial run (when their metadata records a modality).
+
 ## What the report includes
 
 - Executive summary cards

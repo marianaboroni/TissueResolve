@@ -19,16 +19,20 @@ duplicated `report/html.py` renderers safely and in stages.
   the unified shell, so all title/substring assertions still hold.
 - **Stage E/F:** the duplicate page renderers were removed from `html.py`
   (`_generate_*_from_result`, `_generate_report_from_dir`, `_write`, `_section`,
-  `_CSS`); `html.py`'s public functions are now deprecation shims that delegate
-  to `orchestration`. `sections.py`/`assets.py`/`interpretation.py` are retained
-  as the **results-dir content layer** for the canonical path (not a competing
-  renderer); `templates.py` provides HTML fragments for that content layer and
-  still backs the harness's combined validation report. Their docstrings were
-  updated to reflect this role (they are no longer "deprecated, do not extend").
+  `_CSS`). The in-memory section builders + their HTML helpers were then
+  **relocated** to a new `report/result_sections.py` (the in-memory counterpart
+  of `sections.py`), so `html.py` is now a **pure compatibility shim**: three
+  deprecated public functions that delegate to `orchestration`, plus
+  backward-compat re-exports of the relocated builders. `sections.py`/`assets.py`/
+  `interpretation.py` are retained as the **results-dir content layer** for the
+  canonical path; `templates.py` provides HTML fragments for that content layer
+  and still backs the harness's combined validation report. Their docstrings
+  were updated to reflect this role (no longer "deprecated, do not extend").
 
-`html.py` is not deleted because `orchestration` reuses its in-memory section
-builders + helpers; it is a shim plus that content. Full file removal would
-require relocating those builders (a further, optional cleanup).
+`html.py` now contains no report-building logic of its own — only shims and
+re-exports — so it can be deleted in a future cleanup once external callers stop
+importing `tissueresolve.report.html` directly (in-repo callers already use the
+package entry / `orchestration`).
 
 The staged plan as originally written follows.
 

@@ -4,6 +4,17 @@ The single most important rule: **know what the numbers mean before you use
 them.** TissueResolve labels its estimate types explicitly and refuses to
 silently convert between them.
 
+## One run = one modality (and the combined report)
+
+A single `tissueresolve run` processes **one** modality (bulk *or* spatial) and
+writes to its own output directory. Run bulk and spatial into **separate**
+directories (`results/bulk`, `results/spatial`); writing a different-modality
+run into a non-empty directory is refused unless you pass `--force`. A combined
+report produced by `tissueresolve combine-report` summarises **two separate
+runs sharing a reference** — it is **not** a single joint bulk+spatial model.
+Read the bulk and spatial sections (and their warnings) independently; the
+estimate-type rules below apply per modality.
+
 ## Bulk: mRNA proportions ≠ cell fractions
 
 `BulkDeconvResult.proportions` contains **RNA-derived mRNA proportions**
