@@ -1,0 +1,52 @@
+# TissueResolve baseline configuration — FROZEN for v2 development (Stage 0).
+# Do not edit. v2 experiments are compared against this configuration.
+frozen_at: "2026-06-09"
+git_commit_short: d15a3da
+
+reference:
+  source: breast_cancer_sc_reference.h5ad
+  n_donors: 41
+  n_cells: 30000
+  n_genes: 5000
+  min_cells_per_type: 30          # held-out reference build (shipped uses 50)
+  gene_id: feature_name (gene symbols)
+  estimate_overdispersion: true
+
+donor_split:
+  ref_frac: 0.5
+  seeds: [0, 1, 2, 3, 4]
+  disjoint: true                  # mixture donors never used to build the signature
+
+bulk_scenarios: [balanced, imbalanced, rare, similar_subtypes, missing_population]
+bulk:
+  n_samples_per_scenario: 12
+  cells_per_sample: 600
+  rare_level: 0.01
+  default_solver: auto            # data-dependent (gene-masking CV; nnls/ridge)
+  ground_truth: mRNA_proportion   # NOT cell fraction
+  hierarchical_gate:              # current defaults (under audit in Phase 1)
+    allow_unresolved: true
+    unresolved_threshold: 0.10
+    min_discriminating_genes: 10
+    within_family_spillover_threshold: 0.30
+    allow_partial_resolution: true
+    subtype_confidence_threshold: 0.10
+
+spatial:
+  synthetic_n_side: [12, 20]      # 144 / 400 spots
+  cells_per_spot: 40
+  lambda_spatial_default: 0.1
+  structure: sharp_border + gradient + rare_niche
+  real_visium: V1_Breast_Cancer_Block_A_Section_1 (500/3798 spots, NO ground truth)
+
+statistics:
+  replicate_unit_bulk: split x scenario (n=25)
+  replicate_unit_spatial: seed (n=5)
+  bootstrap_n: 2000
+  ci: 0.95
+  paired_test: wilcoxon_signed_rank
+
+external_methods:
+  bulk: [MuSiC@1.0.0, BisqueRNA@1.0.5]      # executed; BayesPrism/CARD failed (toolchain)
+  spatial: [RCTD@2.2.1, cell2location@0.1.4] # executed (CPU); CARD failed; SPOTlight/Tangram not run
+  isolated_envs: {R: benchmarks/envs/r_lib, python: benchmarks/envs/c2l_py39}

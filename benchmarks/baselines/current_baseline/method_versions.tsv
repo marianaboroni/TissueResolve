@@ -1,0 +1,8 @@
+method	version	role
+TissueResolve	0.1.0	baseline (this package)
+MuSiC	1.0.0	external bulk (executed)
+BisqueRNA	1.0.5	external bulk (executed)
+RCTD/spacexr	2.2.1	external spatial (executed)
+cell2location	0.1.4	external spatial (executed, CPU)
+BayesPrism	-	external bulk (FAILED: C++ toolchain)
+CARD	-	external spatial (FAILED: C++ toolchain)
