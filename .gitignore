@@ -48,3 +48,5 @@ demo_demo/
 demo_wiz/
 data/
 benchmarks/envs/c2l_venv/
+examples/second_tissue_crc/data/
+examples/second_tissue_lung/data/
