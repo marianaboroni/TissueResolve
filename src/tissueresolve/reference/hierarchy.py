@@ -880,6 +880,35 @@ def estimate_partial_subtype_resolution(
     return sub, residual
 
 
+def estimate_soft_subtype_resolution(
+    family: str, members: list[str], family_mass: pd.Series,
+    conditional: pd.DataFrame, confidence: dict[str, dict],
+    *, min_confidence: float = 0.0, max_confidence: float = 1.0,
+) -> tuple[pd.DataFrame, pd.Series]:
+    """Partial confidence-WEIGHTED resolution (the validated default gate).
+
+    Unlike :func:`estimate_partial_subtype_resolution` (a binary keep/drop
+    threshold), each subtype's mass is scaled *continuously* by its calibrated
+    confidence ``c_k ∈ [0,1]``:
+
+        resolved_k = family_mass · P(k|family) · c_k
+        residual   = family_mass − Σ_k resolved_k        (≥ 0 since c_k ≤ 1)
+
+    ``c ∈ {0,1}`` reproduces the legacy hard gate; intermediate ``c`` recovers the
+    mass the threshold over-discards.  Mass is conserved exactly
+    (``Σ_k resolved_k + residual = family_mass``).  Validated on breast and lung
+    benchmarks (8–9/9 prospective gates; see SECOND_TISSUE_LUNG_VALIDATION_REPORT).
+    """
+    import numpy as _np
+    sub = pd.DataFrame(0.0, index=family_mass.index, columns=members)
+    for m in members:
+        c = float(confidence.get(m, {}).get("confidence", 0.0))
+        c = float(_np.clip(c, min_confidence, max_confidence))
+        sub[m] = family_mass * conditional[m] * c
+    residual = (family_mass - sub.sum(axis=1)).clip(lower=0.0)
+    return sub, residual
+
+
 def decide_unresolved_families(
     resolvability: pd.DataFrame, *, allow_unresolved: bool = True,
 ) -> list[str]:
@@ -930,6 +959,8 @@ def assemble_hierarchical_estimates(
     within_family_spillover_threshold: float = 0.30,
     allow_partial_resolution: bool = True,
     subtype_confidence_threshold: float = 0.10,
+    gating: str = "soft",
+    gating_version: str = "soft_gating-1.0",
     family_gene_panels: Optional[dict[str, list[str]]] = None,
     extra_metadata: Optional[dict] = None,
 ) -> HierarchicalEstimates:
@@ -966,8 +997,22 @@ def assemble_hierarchical_estimates(
     subtypes = [str(c) for c in fine_props.columns]
     group_of = {st: mapping.get(st, st) for st in subtypes}
 
-    if allow_partial_resolution and allow_unresolved:
-        # Per-subtype: keep confident subtype mass, residual → unresolved_<family>.
+    # ----- Gating-mode dispatch -------------------------------------------
+    # Resolve the effective mode. ``allow_unresolved=False`` forces the
+    # diagnostic ungated behaviour (resolve every family, no unresolved mass),
+    # regardless of the nominal gating mode, preserving the historic semantics
+    # of that flag.
+    gating_mode = str(gating).lower()
+    if gating_mode not in ("soft", "hard", "ungated"):
+        raise ValueError(
+            f"hierarchical_gating must be 'soft', 'hard', or 'ungated' "
+            f"(got {gating!r})")
+    effective_mode = gating_mode if allow_unresolved else "ungated"
+
+    if effective_mode in ("soft", "hard") and allow_partial_resolution:
+        # Per-subtype gating: keep (a fraction of) subtype mass, residual →
+        # unresolved_<family>.  soft = confidence-WEIGHTED (default, validated
+        # on breast + lung); hard = legacy binary threshold gate.
         confidence = compute_within_family_subtype_confidence(
             fine_ref, mapping, min_discriminating_genes=min_discriminating_genes,
             family_gene_panels=family_gene_panels)
@@ -977,9 +1022,13 @@ def assemble_hierarchical_estimates(
             members = [st for st in subtypes if group_of[st] == fam]
             if not members:
                 continue
-            sub, residual = estimate_partial_subtype_resolution(
-                fam, members, family_props[fam], conditional, confidence,
-                subtype_confidence_threshold=subtype_confidence_threshold)
+            if effective_mode == "soft":
+                sub, residual = estimate_soft_subtype_resolution(
+                    fam, members, family_props[fam], conditional, confidence)
+            else:
+                sub, residual = estimate_partial_subtype_resolution(
+                    fam, members, family_props[fam], conditional, confidence,
+                    subtype_confidence_threshold=subtype_confidence_threshold)
             for m in members:
                 resolved_fine[m] = sub[m]
             if float(residual.abs().mean()) > 1e-9:
@@ -989,7 +1038,15 @@ def assemble_hierarchical_estimates(
                            pd.DataFrame(index=family_props.index))
         unresolved_families = sorted(c[len("unresolved_"):] for c in unresolved_mass.columns)
         subtype_confidence = confidence
+    elif effective_mode == "ungated":
+        # Diagnostic only: resolve every family into subtypes, no abstention.
+        unresolved_families = []
+        resolved_fine = combine_family_and_conditional_estimates(
+            family_props, conditional, mapping)
+        unresolved_mass = pd.DataFrame(index=family_props.index)
+        subtype_confidence = {}
     else:
+        # Legacy family-level hard gate (hard mode with partial resolution off).
         unresolved_families = decide_unresolved_families(
             resolvability, allow_unresolved=allow_unresolved)
         absolute = combine_family_and_conditional_estimates(
@@ -1026,6 +1083,66 @@ def assemble_hierarchical_estimates(
                 if v.get("confidence", 0) >= subtype_confidence_threshold))
         if subtype_confidence else None,
     }
+
+    # ----- Gating provenance + mass-conservation diagnostics --------------
+    _mass_total = combined.sum(axis=1)
+    _fam_total = family_props.sum(axis=1)
+    _mass_err = (float((_mass_total - _fam_total).abs().max())
+                 if len(_mass_total) else 0.0)
+    _grand = float(combined.to_numpy().sum()) or 1.0
+    _unres_per_family = {
+        c[len("unresolved_"):]: float(unresolved_mass[c].sum())
+        for c in unresolved_mass.columns
+    }
+    meta.update({
+        "hierarchical_gating": gating_mode,
+        "gating_effective_mode": effective_mode,
+        "gating_version": gating_version,
+        "gating_default": "soft",
+        "gating_is_default": gating_mode == "soft",
+        "gating_confidence_model": (
+            "within_family_discriminating_gene_confidence"
+            if subtype_confidence else None),
+        "gating_confidence_features": (
+            ["n_discriminating_genes", "within_family_spillover",
+             "conditional_separation"] if subtype_confidence else None),
+        "mass_conservation_max_error": _mass_err,
+        "unresolved_mass_fraction": float(
+            unresolved_mass.to_numpy().sum() / _grand)
+        if unresolved_mass.shape[1] else 0.0,
+        "unresolved_mass_per_family": _unres_per_family,
+        "gating_validation_status": (
+            "validated on breast and lung benchmarks" if gating_mode == "soft"
+            else "legacy" if gating_mode == "hard" else "diagnostic"),
+        "hard_gating_status": "legacy",
+    })
+    # expose per-subtype confidence so the resolution decision layer (and report)
+    # can select supported subtypes without recomputation
+    if subtype_confidence:
+        meta["subtype_confidence"] = {
+            str(k): {"confidence": float(v.get("confidence", 0.0))}
+            for k, v in subtype_confidence.items()}
+
+    # ----- Resolution Decision Layer: trusted resolution per family --------
+    # Decide broad_only / selected_fine / full_fine from the (already computed)
+    # within-family signature evidence + per-subtype confidence, BEFORE fine
+    # predictions are interpreted.  Recorded in metadata + the qc table so it
+    # affects the outputs/report, not only visualisation.  Full-panel reliability
+    # dominates; cell-level AUROC is never used here.
+    try:
+        from tissueresolve.resolution import (
+            decide_trusted_resolution, decisions_metadata)
+        _decisions = decide_trusted_resolution(
+            identifiability_metrics=resolvability, family_map=mapping,
+            subtype_confidence=subtype_confidence or None)
+        meta["resolution_decision"] = decisions_metadata(_decisions)
+        meta["trusted_resolution"] = {f: d.status for f, d in _decisions.items()}
+        qc["trusted_resolution"] = [
+            _decisions[str(f)].status if str(f) in _decisions else "full_fine"
+            for f in qc["broad_family"]]
+    except Exception as _exc:  # never let the decision layer break deconvolution
+        meta["resolution_decision_error"] = str(_exc)
+
     if extra_metadata:
         meta.update(extra_metadata)
 

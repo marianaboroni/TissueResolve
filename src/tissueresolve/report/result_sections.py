@@ -250,6 +250,9 @@ def _hierarchical_html(result: Any, modality: str) -> Optional[str]:
         f"level as <code>unresolved_&lt;family&gt;</code> (averaged over {unit}).</p>"
     )
 
+    gating_html = _gating_mode_html(est)
+    trusted_html = _trusted_resolution_html(est)
+
     # mean family-level composition
     fam_mean = est.family_proportions.mean(axis=0).sort_values(ascending=False)
     fam_html = _df_html(fam_mean.to_frame("mean_proportion").round(4))
@@ -291,12 +294,122 @@ def _hierarchical_html(result: Any, modality: str) -> Optional[str]:
 
     body = (
         intro
+        + trusted_html                       # trusted-resolution table BEFORE fine predictions
+        + gating_html
         + "<h3>Broad family composition (mean)</h3>" + fam_html
         + "<h3>Within-family resolvability</h3>" + qc_html
         + unresolved_html
         + "<h3>How to interpret each family</h3>" + interp_html
     )
     return body
+
+
+def _trusted_resolution_html(est: Any) -> str:
+    """Trusted-resolution-by-family table, shown BEFORE fine predictions.
+
+    Surfaces the Resolution Decision Layer's per-family status
+    (broad_only / selected_fine / full_fine).  broad_only families are flagged so
+    their fine composition is read as diagnostic, not trusted.
+    """
+    meta = getattr(est, "metadata", None) or {}
+    trusted = meta.get("trusted_resolution")
+    if not trusted:
+        return ""
+    rd = meta.get("resolution_decision", {}) or {}
+    supported = rd.get("supported_subtypes", {})
+    badge = {
+        "full_fine": '<span class="ok">full_fine</span>',
+        "selected_fine": '<span class="warn">selected_fine</span>',
+        "broad_only": '<span class="warn">broad_only (fine = diagnostic only)</span>',
+    }
+    rows = []
+    for fam in sorted(trusted):
+        status = trusted[fam]
+        rows.append({"broad_family": fam,
+                     "trusted_resolution": badge.get(status, status),
+                     "n_supported_subtypes": len(supported.get(fam, []))})
+    table = _df_html(pd.DataFrame(rows), raw=True)
+    n_bo = rd.get("n_broad_only", 0); n_sf = rd.get("n_selected_fine", 0)
+    n_ff = rd.get("n_full_fine", 0)
+    return (
+        "<h3>Trusted resolution by family</h3>"
+        "<p>The Resolution Decision Layer classifies each family <b>before</b> fine "
+        "predictions are interpreted, using full-panel deconvolution reliability, "
+        "within-family signature separability, and query compatibility. "
+        "<b>Cell-level classification AUROC is not a criterion.</b> "
+        f"{n_ff} full_fine, {n_sf} selected_fine, {n_bo} broad_only.</p>"
+        "<ul>"
+        "<li><b>full_fine</b>: full fine composition is supportable (still soft-gated).</li>"
+        "<li><b>selected_fine</b>: only the supported subtypes are trusted; the rest are "
+        "routed to unresolved / shown as not trusted.</li>"
+        "<li><b>broad_only</b>: subtypes are not reliably deconvolvable in the full panel; "
+        "broad mass is trusted and any fine split is <b>diagnostic only</b>.</li>"
+        "</ul>"
+        + table
+        + "<p><i>Fine predictions below are gated by this trusted-resolution status and by "
+        "soft gating; they are RNA-derived proportions, not cell fractions.</i></p>"
+    )
+
+
+def _gating_mode_html(est: Any) -> str:
+    """State the active gating mode, that soft is the default and hard is legacy,
+    plus the standard interpretation caveats and the methods note."""
+    meta = getattr(est, "metadata", None) or {}
+    mode = str(meta.get("gating_effective_mode", meta.get("hierarchical_gating", "soft")))
+    version = meta.get("gating_version", "soft_gating-1.0")
+    mass_err = meta.get("mass_conservation_max_error")
+    unres_frac = meta.get("unresolved_mass_fraction")
+    labels = {
+        "soft": "<b>soft</b> (default)",
+        "hard": "<b>hard</b> (legacy)",
+        "ungated": "<b>ungated</b> (diagnostic)",
+    }
+    active = labels.get(mode, f"<b>{mode}</b>")
+    extra = ""
+    if mass_err is not None:
+        extra += f" Mass-conservation error: {float(mass_err):.2e}."
+    if unres_frac is not None:
+        extra += f" Mean unresolved fraction: {float(unres_frac):.3f}."
+    return (
+        "<h3>Within-family gating mode</h3>"
+        f"<p>Active gating mode: {active} "
+        f"(<code>{version}</code>).{extra}</p>"
+        "<ul>"
+        "<li><b>soft</b> (default): partial confidence-weighted unresolved mass. "
+        "Each subtype's mass is scaled by a calibrated confidence in [0,1] and the "
+        "residual family mass is assigned to <code>unresolved_&lt;family&gt;</code>. "
+        "Validated on breast and lung benchmarks.</li>"
+        "<li><b>hard</b> (legacy): binary threshold gate. Kept for reproducibility "
+        "but <i>over-abstains in collinear families</i> (large fractions of mass "
+        "left unresolved); not recommended as a default.</li>"
+        "<li><b>ungated</b> (diagnostic only): no abstention; not calibrated.</li>"
+        "</ul>"
+        "<p><b>How to read fine predictions.</b> Fine (subtype) predictions are "
+        "gated by trusted within-family resolution: a high cell-classification "
+        "AUROC is <i>not</i> proof that a subtype can be reliably deconvolved from "
+        "a mixture. Report values are <b>RNA-derived proportions, not cell "
+        "fractions</b>, unless explicit mRNA-content correction was applied.</p>"
+        "<p class=\"warn\"><b>Spillover &amp; false-positive caution.</b> In "
+        "collinear families (where subtypes share 96–99% of their signature), "
+        "within-family conditional estimates carry real risk of <i>spillover</i> "
+        "(mass leaking onto the wrong subtype) and <i>false-positive detection</i> "
+        "(non-zero estimates for absent subtypes). Treat subtype-level splits in "
+        "such families as cautious; prefer the broad family or "
+        "<code>unresolved_&lt;family&gt;</code> when separability is low.</p>"
+        "<p><i>Methods note.</i> TissueResolve hierarchical inference uses partial "
+        "confidence-weighted gating. For each subtype, the raw estimated mass is "
+        "multiplied by a calibrated confidence score, and the remaining family mass "
+        "is assigned to unresolved. This prevents the excessive abstention observed "
+        "with legacy hard gating while preserving uncertainty.</p>"
+        "<p><i>Fine-granularity refinement (experimental, not used).</i> A compact "
+        "fine-level refiner (contrast-weighted WNNLS / residual contrasts / "
+        "spillover calibration) was evaluated to push high-granularity resolution "
+        "in collinear families. It <b>failed promotion on both breast and lung</b>: "
+        "it lowered conditional RMSE in some settings only by <b>increasing "
+        "spillover and false-positive subtype detection</b>. It remains experimental "
+        "and is <b>not applied</b> in this run; soft gating is the final hierarchical "
+        "layer. See <code>docs/FINE_GRANULARITY_REFINER_REPORT.md</code>.</p>"
+    )
 
 
 # ---------------------------------------------------------------------------

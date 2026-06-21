@@ -81,6 +81,51 @@ pretending otherwise.
 - **Unresolved mode** — when a family is not resolvable (low separability, high
   spillover, high uncertainty), its mass is reported as `unresolved_<family>`
   instead of being confidently split into subtypes. Total mass is preserved.
+- **Trusted resolution by family** (Resolution Decision Layer,
+  `src/tissueresolve/resolution.py`). Before fine predictions are interpreted, each
+  broad family is classified as:
+  - `full_fine` — full fine composition is supportable (still soft-gated);
+  - `selected_fine` — only the supported subtypes are trusted; the rest are routed
+    to unresolved / shown as not trusted;
+  - `broad_only` — subtypes are not reliably deconvolvable in the full panel; broad
+    mass is trusted and any fine split is **diagnostic only**.
+  The decision is driven by **full-panel deconvolution reliability** and within-family
+  separability / query compatibility — **not** by cell-level classification AUROC
+  (which is reported but never a decision criterion). It distinguishes three
+  identifiability levels that must not be conflated: cell classifiability, pairwise
+  mixture recovery, and full-panel reliability; only the third drives trusted status.
+  Missing evidence ⇒ the more conservative resolution. The status is recorded in run
+  metadata (`trusted_resolution`, `resolution_decision`) and the per-family QC table,
+  so it affects the outputs, not only the report.
+- **Within-family gating mode** (`--hierarchical-gating`, hierarchical mode only):
+  - `soft` *(default)* — **partial confidence-weighted** unresolved mass. Each
+    subtype's mass is multiplied by a calibrated confidence in [0,1]; the residual
+    family mass goes to `unresolved_<family>`. Family and total mass are conserved.
+    Validated on breast and lung benchmarks.
+  - `hard` *(legacy)* — binary threshold gate (confident subtypes keep full mass,
+    the rest are zeroed to unresolved). Kept for reproducibility, but it
+    **over-abstains in collinear families** (large unresolved fractions, collapsed
+    effective-N); not recommended as a default.
+  - `ungated` *(diagnostic only)* — no abstention; not calibrated.
+  The run metadata records the active mode, version, mass-conservation error,
+  unresolved-mass summary, and validation status. A high cell-classification AUROC
+  is **not** proof that a subtype can be reliably deconvolved from a mixture, and
+  values are **RNA-derived proportions, not cell fractions**.
+- **Spillover & false-positive caution for fine predictions.** In collinear
+  families (subtypes sharing 96–99% of their signature), within-family conditional
+  estimates carry real risk of *spillover* (mass leaking onto the wrong subtype)
+  and *false-positive detection* (non-zero estimates for truly absent subtypes).
+  Trust subtype-level splits only where within-family resolution is high; otherwise
+  prefer the broad family or `unresolved_<family>`. Fine predictions are always
+  **gated by trusted resolution** — they are not presented as reliable just because
+  they are non-zero.
+- **Fine-granularity refinement (experimental, NOT used).** A compact fine-level
+  refiner (contrast-weighted WNNLS / residual contrasts / spillover calibration)
+  was tested to force higher subtype resolution in collinear families. It **failed
+  promotion on breast and lung** — it lowered conditional RMSE in some settings only
+  by **increasing spillover and false-positive subtype detection**, so it remains a
+  documented negative result and is **not applied**. Soft gating is the final
+  hierarchical layer. See `FINE_GRANULARITY_REFINER_REPORT.md`.
 - **Hierarchical view** — `broad_proportions` (group level),
   `conditional_subtype_proportions` (within a group), `absolute_subtype_proportions`
   (broad × conditional), and `unresolved_family_mass` (kept at the broad level).

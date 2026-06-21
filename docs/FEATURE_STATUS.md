@@ -11,6 +11,12 @@ not implemented; **not implemented** = absent (and must not be claimed).
 | Spatial deconvolution (NB-CAR) | **stable** | default path |
 | Solver `auto` (gene-masking CV) | **stable** | matches NNLS on real bulk |
 | Hierarchical broad→fine | **stable** | default `resolution-mode auto/hierarchical`; unresolved mass at family level |
+| Resolution Decision Layer (trusted resolution per family) | **stable** | `src/tissueresolve/resolution.py`; classifies each family `broad_only`/`selected_fine`/`full_fine` from full-panel reliability + signature/query evidence (NOT cell-level AUROC) before fine predictions are interpreted; recorded in run metadata + QC table + report (table shown before fine predictions); backward-compatible (numeric estimates unchanged; soft gating still final) |
+| Modality-aware pipeline metadata | **stable** | bulk vs spatial recorded explicitly (prediction unit sample/spot, gene-weighting mode, spatial smoothing used, H&E availability, fine trusted vs diagnostic); `compute_modality_aware_gene_weights` shared compatibility wrapper |
+| Within-family soft gating (partial confidence-weighted) | **stable / default** | `--hierarchical-gating soft` (DEFAULT); mass-conserving; validated on breast + lung benchmarks |
+| Within-family hard gating (binary threshold) | **legacy** | `--hierarchical-gating hard`; kept for reproducibility; over-abstains in collinear families; not default |
+| Within-family ungated (diagnostic) | **diagnostic** | `--hierarchical-gating ungated`; no abstention; not calibrated |
+| FineGranularityRefiner (contrast-weighted / residual / spillover-calibrated fine refinement) | **experimental — negative result; NOT integrated** | `experimental/soft_hierarchy/fine_refiner.py`; **failed promotion gates on breast + lung** — lowered conditional RMSE in some settings only by increasing spillover and false-positive subtype detection; not used by default, not wired into any pipeline; soft gating remains the final hierarchical layer. See `docs/FINE_GRANULARITY_REFINER_REPORT.md` |
 | Granular signatures (broad / cell-type / state panels) | **experimental** | `reference/granular_signatures.py`, tested; built from per-cell AnnData at build time |
 | State-aware hierarchy (broad→cell type→state) | **experimental** | `bulk/state_aware_hierarchical.py`; behind `--state-aware` / `deconv_bulk(state_aware=True)`; **not default**; falls back to 2-level when no state labels; **not yet validated on real data** |
 | Reference suitability score | **stable** | PASS/CAUTION/WARNING/FAIL with worst-component override |

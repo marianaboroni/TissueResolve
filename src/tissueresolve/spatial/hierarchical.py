@@ -75,6 +75,8 @@ def run_hierarchical_spatial(
     within_family_spillover_threshold: float = 0.30,
     allow_partial_resolution: bool = True,
     subtype_confidence_threshold: float = 0.10,
+    hierarchical_gating: str = "soft",
+    gating_version: str = "soft_gating-1.0",
     **run_kwargs,
 ) -> HierarchicalSpatialResult:
     """Run broad-to-fine hierarchical spatial deconvolution.
@@ -111,6 +113,8 @@ def run_hierarchical_spatial(
         within_family_spillover_threshold=within_family_spillover_threshold,
         allow_partial_resolution=allow_partial_resolution,
         subtype_confidence_threshold=subtype_confidence_threshold,
+        gating=hierarchical_gating,
+        gating_version=gating_version,
         extra_metadata={
             "modality": "spatial",
             "lambda_spatial_family": float(family_result.deconv.lambda_spatial),
@@ -118,6 +122,8 @@ def run_hierarchical_spatial(
         },
     )
 
+    _trusted = estimates.metadata.get("trusted_resolution", {})
+    _lam = float(family_result.deconv.lambda_spatial)
     run_metadata = {
         **family_result.run_metadata,
         "resolution_mode": "hierarchical",
@@ -125,8 +131,19 @@ def run_hierarchical_spatial(
         "hierarchy_mapping": dict(mapping),
         "broad_families": list(family_ref.cell_types),
         "fine_cell_types": list(fine_ref.cell_types),
-        "lambda_spatial_family": float(family_result.deconv.lambda_spatial),
+        "lambda_spatial_family": _lam,
         "lambda_spatial_fine": float(fine_result.deconv.lambda_spatial),
+        # modality provenance (spatial-specific; rule: explicit modality differences)
+        "modality": "spatial",
+        "prediction_unit": "spot",
+        "gene_weighting_mode": "marker_unweighted_nb_car",
+        "spatial_smoothing_used": bool(_lam > 0),
+        "coordinates_used": True,
+        "h_and_e_available": False,
+        "fine_predictions_trusted": [f for f, s in _trusted.items()
+                                     if s in ("full_fine", "selected_fine")],
+        "fine_predictions_diagnostic_only": [f for f, s in _trusted.items()
+                                             if s == "broad_only"],
         **estimates.metadata,
     }
 

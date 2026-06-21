@@ -86,6 +86,8 @@ def run_hierarchical_bulk(
     within_family_spillover_threshold: float = 0.30,
     allow_partial_resolution: bool = True,
     subtype_confidence_threshold: float = 0.10,
+    hierarchical_gating: str = "soft",
+    gating_version: str = "soft_gating-1.0",
     family_gene_panels: Optional[dict[str, list[str]]] = None,
     **run_kwargs,
 ) -> HierarchicalBulkResult:
@@ -136,11 +138,14 @@ def run_hierarchical_bulk(
         within_family_spillover_threshold=within_family_spillover_threshold,
         allow_partial_resolution=allow_partial_resolution,
         subtype_confidence_threshold=subtype_confidence_threshold,
+        gating=hierarchical_gating,
+        gating_version=gating_version,
         family_gene_panels=family_gene_panels,
         extra_metadata={"modality": "bulk",
                         "within_family_panels": bool(family_gene_panels)},
     )
 
+    _trusted = estimates.metadata.get("trusted_resolution", {})
     run_metadata = {
         **family_result.run_metadata,
         "resolution_mode": "hierarchical",
@@ -148,6 +153,16 @@ def run_hierarchical_bulk(
         "hierarchy_mapping": dict(mapping),
         "broad_families": list(family_ref.cell_types),
         "fine_cell_types": list(fine_ref.cell_types),
+        # modality provenance (bulk-specific; rule: explicit modality differences)
+        "modality": "bulk",
+        "prediction_unit": "sample",
+        "gene_weighting_mode": "protocol_aware_weighted_nnls",
+        "spatial_smoothing_used": False,
+        "h_and_e_available": False,
+        "fine_predictions_trusted": [f for f, s in _trusted.items()
+                                     if s in ("full_fine", "selected_fine")],
+        "fine_predictions_diagnostic_only": [f for f, s in _trusted.items()
+                                             if s == "broad_only"],
         **estimates.metadata,
     }
 

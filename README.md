@@ -16,6 +16,38 @@ fine subpopulations within each family, and reports `unresolved_<family>` mass
 where subtypes are not separable. Flat (fine-only) deconvolution remains
 available but must be requested explicitly (`--resolution-mode flat`).
 
+Within-family resolution uses **partial confidence-weighted soft gating** by
+default (`--hierarchical-gating soft`): each subtype's estimated mass is scaled
+by a calibrated confidence in [0,1] and the residual family mass goes to
+`unresolved_<family>`, conserving total mass. Soft gating was validated on two
+tissues (breast and lung benchmarks). The previous binary threshold gate is
+still available as `--hierarchical-gating hard` (**legacy**; it over-abstains in
+collinear families), and `--hierarchical-gating ungated` is a diagnostic-only
+mode (no abstention). These options affect hierarchical mode only — flat and
+auto solver behaviour are unchanged.
+
+TissueResolve follows an **evidence-based decision order**: it evaluates reference
+quality and query/reference compatibility, then a **Resolution Decision Layer**
+(`src/tissueresolve/resolution.py`) classifies each broad family as `broad_only`,
+`selected_fine`, or `full_fine` **before** fine predictions are interpreted —
+driven by full-panel deconvolution reliability and within-family separability, not
+by cell-level classification AUROC. Fine deconvolution is trusted only where
+supported; `broad_only` families show broad mass as trusted and any fine split as
+diagnostic only. Soft gating remains the final uncertainty layer. The QC-first
+report shows reference quality, query compatibility, and the trusted-resolution
+table before any fine predictions. TissueResolve is unified but **modality-aware**:
+bulk and spatial share the reference, hierarchy, resolution decision, and soft
+gating, but differ in prediction unit (sample vs spot), noise model, and
+gene-weighting (bulk protocol-aware weighted NNLS; spatial marker + NB-CAR).
+
+A compact fine-level refinement layer (`FineGranularityRefiner`) was evaluated to
+push high-granularity resolution in collinear families and **failed promotion on
+both breast and lung** — it lowered conditional RMSE in some settings only by
+increasing spillover and false-positive subtype detection. It is **experimental, a
+documented negative result, and not used by default**. Soft gating remains the
+final hierarchical layer. See
+[docs/FINE_GRANULARITY_REFINER_REPORT.md](docs/FINE_GRANULARITY_REFINER_REPORT.md).
+
 ## What TissueResolve does
 
 - Estimates RNA-derived composition from bulk RNA-seq and 10x Visium data.
@@ -211,15 +243,18 @@ A `tissueresolve run` writes an analysis bundle:
 - `methods.txt` — auto-generated methods text for the run
 - `warnings.json` — surfaced warnings (estimate type, QC, non-convergence,
   protocol risk)
-- `report.html` — publication-style report generated from the run result
-  (predictions, QC, methods, warnings populated)
+- `figures/` — interpretive figures (PNG + PDF/SVG + `.data.tsv` source data):
+  bulk composition / proportion heatmap / reconstruction QC; spatial abundance
+  maps / dominant-type map / Moran's I
+- `report.html` — publication-style, **figure-driven** report generated from the
+  run result (predictions, QC, methods, warnings, and the figures embedded)
 
-`run` renders `report.html` from the in-memory result and does **not** itself
-write standalone figure files (`figures/*.html` + `.data.tsv`); those richer
-figure outputs are produced by the report layer and the real-data validation
-harness (`examples/real_breast_cancer/scripts/07_generate_reports.py`). You can
-also (re)generate a report from a results directory with `tissueresolve report
---modality bulk|spatial --results-dir <dir>` (see below).
+`run` renders `report.html` from the in-memory result with the figures embedded.
+You can also (re)generate a report from a results directory with `tissueresolve
+report --modality bulk|spatial --results-dir <dir>` (see below). The richer
+publication report with the full diagnostic figure set + technical appendix is
+produced by the real-data validation harness
+(`examples/real_breast_cancer/scripts/07_generate_reports.py`).
 
 ## Where are my results?
 

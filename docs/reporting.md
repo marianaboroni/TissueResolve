@@ -81,6 +81,28 @@ bulk+spatial model. It validates that `--bulk-dir` is a bulk run and
 - Detailed tables in collapsible sections
 - File list for reproducibility
 
+For hierarchical runs, the report's "Hierarchical resolution-aware
+deconvolution" section opens with a **Trusted resolution by family** table (from
+the Resolution Decision Layer) shown **before** any fine predictions: each family
+is `full_fine`, `selected_fine`, or `broad_only`, decided from full-panel
+deconvolution reliability and signature/query evidence (not cell-level AUROC).
+`broad_only` families are flagged so their fine split reads as **diagnostic only**,
+and the block restates that values are RNA-derived proportions, not cell fractions.
+The section then includes a **Within-family gating mode** block that names
+the active gating mode and states that **soft** gating is the default (partial
+confidence-weighted, validated on breast + lung), **hard** is legacy (binary
+threshold; over-abstains in collinear families), and **ungated** is
+diagnostic-only. It also reminds readers that a high cell-classification AUROC is
+not proof of deconvolution reliability and that values are RNA-derived
+proportions, not cell fractions, and embeds the standard gating methods note.
+
+The same block carries a **spillover & false-positive caution** (collinear-family
+conditional estimates risk leaking mass onto the wrong subtype and detecting absent
+subtypes — fine predictions are gated by trusted resolution) and a note that the
+experimental **FineGranularityRefiner** is a documented negative result (it
+increased spillover and false positives on breast + lung) and is **not applied**.
+The report never presents fine refinement as a promoted/active feature.
+
 ## Figures and source data
 
 Report figures are Plotly-based. When `kaleido` is installed, the package
