@@ -327,12 +327,124 @@ benchmark with per-sample prediction export.
 
 ## R20. Remaining limitations
 
-- Only 11 full-overlap samples per dataset; descriptive only, no CIs.
-- BayesPrism, DWLS, SCDC, CIBERSORTx not executed → the external panel is
-  **incomplete**.
-- Internal benchmark did not export per-sample predictions, blocking paired
-  statistics.
+- Only 11 full-overlap samples per dataset; CIs are wide (see "Bulk benchmark
+  completion status" below — paired CIs are now computed, not faked).
+- DWLS, SCDC, CIBERSORTx not executed → the external panel remains **partial**
+  (BayesPrism has now been run on a small subset).
 - Broad labels for breast are inferred from fine labels (documented internal
   limitation).
 - Reduced-gene-overlap and low-depth scenarios are present in the internal run
   but the external comparison uses only the `full_overlap` group.
+
+---
+
+# Bulk benchmark completion status (Phase 1, run 2026-06-23)
+
+This section supersedes the "no CIs / panel incomplete" caveats above with the
+work done to make the bulk benchmark statistically usable.
+
+## C1. Per-sample TissueResolve predictions — SAVED
+
+`gold_truth_performance_benchmark.py` now saves per-sample prediction matrices
+for every TissueResolve mode (estimates unchanged; only persisted):
+
+```
+benchmarks/outputs/gold_truth_performance/predictions/TissueResolve_<mode>__<dataset>[__<group>].tsv
+benchmarks/outputs/gold_truth_performance/predictions_broad/...
+benchmarks/outputs/gold_truth_performance/predictions_manifest.tsv
+```
+
+Each file has rows = sample IDs, columns = fine/broad labels (same names as
+truth), with a sidecar `.meta.json` recording row sums, estimate type
+(`RNA_derived`), mode, dataset, scenario group, seed, and donor split.
+**Verified:** internal `full_overlap` sample IDs are identical to the external
+tool predictions (alignment test passes), so paired comparison is valid.
+
+## C2. Paired bootstrap CIs — COMPUTED (not faked)
+
+`gold_truth_paired_stats.py` computes percentile paired bootstrap CIs (n=5000)
+of per-sample metric **differences** (method A − method B) on the shared
+`full_overlap` mixtures. Outputs:
+
+```
+benchmarks/outputs/gold_truth_external/paired_bootstrap_ci.tsv
+benchmarks/outputs/gold_truth_external/rank_stability.tsv
+benchmarks/outputs/gold_truth_external/rank_by_task.tsv
+```
+
+Headline paired results (n=11 per dataset; "favors" only when the 95% CI
+excludes 0):
+
+| comparison | dataset | metric | mean diff (A−B) | 95% CI | favors |
+|---|---|---|---|---|---|
+| flat vs MuSiC | breast | fine RMSE | +0.008 | [−0.003, +0.021] | **tie** |
+| flat vs MuSiC | lung | fine RMSE | +0.004 | [−0.005, +0.013] | **tie** |
+| flat vs MuSiC | breast | broad RMSE | +0.032 | [+0.019, +0.045] | MuSiC |
+| flat vs BisqueRNA | lung | fine RMSE | −0.023 | [−0.042, −0.005] | **flat** |
+| flat vs BisqueRNA | lung | fine Pearson | +0.311 | [+0.109, +0.517] | **flat** |
+| flat vs NNLS | lung | fine Pearson | +0.096 | [+0.030, +0.178] | **flat** |
+| hierarchical_soft vs MuSiC | both | fine/broad RMSE | + | excludes 0 | MuSiC |
+
+Interpretation: **on raw fine accuracy, TissueResolve_flat is statistically
+tied with MuSiC on both datasets**, beats BisqueRNA on lung, and is slightly
+behind MuSiC/Bisque on breast *broad*. `hierarchical_soft`/`auto` are
+significantly worse on raw metrics — expected, because they abstain. No method
+statistically dominates across tasks; MuSiC is the most consistent #1 on fine
+RMSE in `rank_stability` (prob_best 0.55 breast, 0.73 lung), with
+TissueResolve_flat the top internal mode (rank #2 on lung).
+
+## C3. DWLS / SCDC — skipped_not_installed
+
+Both checked: `requireNamespace('DWLS')` → FALSE, `requireNamespace('SCDC')` →
+FALSE; no runner scripts present. **Not installed, not run, not ranked.**
+Install hints: DWLS — `remotes::install_bitbucket('yuanlab/DWLS')` (or the
+maintained `install.packages('DWLS')` where available); SCDC —
+`remotes::install_github('meichendong/SCDC')`. Per project rules these were not
+auto-installed.
+
+## C4. BayesPrism — executed on a small subset (feasible)
+
+Run on **breast, 2 scenarios, 2 mixtures**:
+
+| metric | value |
+|---|---|
+| status | executed |
+| runtime | 88.0 s (2 samples) |
+| broad Pearson / RMSE | 0.927 / 0.032 |
+
+BayesPrism is the **strongest broad-composition method on the breast subset**,
+but a full-panel run was ~2180 s previously, so it is recorded as
+**feasible-for-subset / too-slow-for-routine-full-panel**. Subset outputs:
+`benchmarks/outputs/gold_truth_external_bayesprism_subset/`. It is not added to
+the main combined leaderboard because it was scored on a 2-sample subset, not
+the full 11-sample `full_overlap` set.
+
+## C5. CIBERSORTx — export-only (unchanged)
+
+Web/token-gated; no local predictions imported → not scored, not ranked.
+
+## C6. Scenario-group coverage
+
+The internal benchmark scores three groups: `full_overlap` (6 TissueResolve
+modes), `reduced_gene_overlap` (6 modes), and `spatial_like` (1 mode). The
+**external bulk comparison uses only `full_overlap`** (the external runners
+consume the concatenated full-overlap bundle). `reduced_gene_overlap` and
+`spatial_like` were scored for TissueResolve internally but **not** for external
+tools in this session. Truth generation was not changed. Extending external
+tools to `reduced_gene_overlap` is future work.
+
+## C7. Bulk completion summary
+
+| blocker | status |
+|---|---|
+| Per-sample predictions saved | ✅ done |
+| Paired bootstrap CIs | ✅ computed (not faked) |
+| DWLS / SCDC | ⛔ not installed (recorded + hints) |
+| BayesPrism | ✅ subset executed; full panel deferred (runtime) |
+| CIBERSORTx | ◻️ export-only |
+| Beyond full_overlap (external) | ◻️ documented, not run |
+
+Supported after Phase 1: "TissueResolve_flat is statistically competitive
+(tie with MuSiC) on raw fine accuracy and provides resolution-aware abstention
+the external tools lack." Still **not** supported: any claim of broad
+superiority.
