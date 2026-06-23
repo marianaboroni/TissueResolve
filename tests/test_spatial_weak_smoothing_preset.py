@@ -86,3 +86,32 @@ def test_report_documents_lambda_and_smoothing_status():
     assert "0.02" in report and "0.1" in report
     assert "oversmoothing" in report.lower()
     assert "weak_smoothing" in report
+
+
+# --- generalized synthetic spatial generator (domain_families) ---------------
+def test_build_spatial_targets_respects_domain_families():
+    import numpy as np
+    from benchmarks.shared.synthetic_spatial import build_spatial_targets, BREAST_DOMAIN_FAMILIES
+    ref_types = ["epi1", "epi2", "imm1", "imm2", "str1"]
+    mapping = {"epi1": "Epi", "epi2": "Epi", "imm1": "Imm", "imm2": "Imm", "str1": "Str"}
+    fams = {"left": ["Epi"], "right": ["Imm"], "gradient": ["Str"]}
+    targets, coords, domains, meta = build_spatial_targets(
+        ref_types, mapping, n_side=6, seed=0, domain_families=fams)
+    # left half should be Epi-enriched, right half Imm-enriched
+    mid = 3
+    left = targets[coords[:, 1] < mid]
+    right = targets[coords[:, 1] >= mid]
+    assert left[["epi1", "epi2"]].sum(1).mean() > left[["imm1", "imm2"]].sum(1).mean()
+    assert right[["imm1", "imm2"]].sum(1).mean() > right[["epi1", "epi2"]].sum(1).mean()
+    assert set(domains) <= {"L", "R", "niche"}
+    # backward-compat default exists and is the breast layout
+    assert BREAST_DOMAIN_FAMILIES["left"] == ["Epithelial"]
+
+
+def test_build_spatial_targets_default_is_breast_layout():
+    from benchmarks.shared.synthetic_spatial import build_spatial_targets
+    ref_types = ["T", "B"]
+    mapping = {"T": "Epithelial", "B": "Myeloid"}
+    # no domain_families -> uses breast defaults without error
+    targets, coords, domains, meta = build_spatial_targets(ref_types, mapping, n_side=4, seed=1)
+    assert targets.shape[0] == 16 and abs(targets.sum(1).mean() - 1.0) < 1e-6

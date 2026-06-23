@@ -5,7 +5,10 @@
 # score_external_synthetic.py scores it with the same metrics. Fails gracefully.
 .libPaths(c(file.path("benchmarks","envs","Rlib"), .libPaths()))
 method <- "CARD"; t0 <- Sys.time()
-base <- file.path("benchmarks","outputs","spatial_synthetic","external_inputs")
+# Optional first CLI arg = external_inputs base dir (defaults to breast synthetic).
+.args <- commandArgs(trailingOnly=TRUE)
+base <- if (length(.args) >= 1 && nzchar(.args[1])) .args[1] else
+  file.path("benchmarks","outputs","spatial_synthetic","external_inputs")
 
 status <- function(st, ver, msg, predf="") {
   df <- data.frame(method=method, status=st, version=ver,
