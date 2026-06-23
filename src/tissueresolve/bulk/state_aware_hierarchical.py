@@ -71,6 +71,8 @@ def run_state_aware_hierarchical_bulk(
     within_family_spillover_threshold: float = 0.30,
     allow_partial_resolution: bool = True,
     subtype_confidence_threshold: float = 0.10,
+    hierarchical_gating: str = "soft",
+    gating_version: str = "soft_gating-1.0",
     **run_kwargs,
 ) -> StateAwareBulkResult:
     """Run broad → cell type → state hierarchical bulk deconvolution.
@@ -90,7 +92,9 @@ def run_state_aware_hierarchical_bulk(
                   min_discriminating_genes=min_discriminating_genes,
                   within_family_spillover_threshold=within_family_spillover_threshold,
                   allow_partial_resolution=allow_partial_resolution,
-                  subtype_confidence_threshold=subtype_confidence_threshold)
+                  subtype_confidence_threshold=subtype_confidence_threshold,
+                  gating=hierarchical_gating,
+                  gating_version=gating_version)
 
     # --- references at each granularity (aggregate upward) ---
     if hierarchy.has_states:

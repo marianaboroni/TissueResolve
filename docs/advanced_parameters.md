@@ -42,12 +42,28 @@ tissueresolve spatial run --visium visium.h5ad --reference reference.h5ad \
 - `--cell-type-col` — cell-type column name in reference `obs`.
 - `--marker-genes` — optional marker gene list file.
 - `--lambda-spatial` — CAR smoothing strength.
+- `--spatial-preset` — experimental spatial smoothing preset (`default`,
+  `weak_smoothing`, `no_smoothing`). See the note below.
 - `--max-iter` — max solver iterations.
 - `--random-state` — random seed.
 - `--min-counts` — minimum UMI per spot.
 - `--min-genes` — minimum detected genes per spot.
 - `--neighbourhood / --no-neighbourhood` — compute neighborhood statistics.
 - `--genome` — genome assembly (`hg38` or `mm10`).
+
+### Experimental weak-smoothing preset
+
+TissueResolve includes an experimental weak-smoothing preset for spatial
+deconvolution. In synthetic breast and lung benchmarks, this preset reduced
+oversmoothing and improved broad/fine correlation while preserving local RMSE.
+However, because rare-niche behavior and effective-N calibration were not
+consistently improved across tissues, the preset remains opt-in and the default
+smoothing parameter is unchanged.
+
+Enable it with `--spatial-preset weak_smoothing` (sets `lambda_spatial = 0.02`;
+the default is `0.1`). An explicit `--lambda-spatial` overrides the preset. See
+`docs/SPATIAL_WEAK_SMOOTHING_BENCHMARK_REPORT.md` for the full multi-dataset
+evaluation.
 
 ## Reporting options
 

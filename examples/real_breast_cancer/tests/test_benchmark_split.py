@@ -89,8 +89,8 @@ def test_main_summary_excluded_from_primary(tmp_path, rep):
 @pytest.mark.skipif(not REPORT.exists(), reason="report not generated")
 def test_report_has_separate_benchmark_sections():
     html = REPORT.read_text()
-    assert "9. Bulk benchmark" in html
-    assert "10. Spatial benchmark" in html
+    assert "7. Bulk benchmark" in html
+    assert "8. Spatial benchmark" in html
     assert "Benchmark comparison" not in html          # old combined section gone
     # main summary figures relocated to collapsible technical appendix
     assert "technical_appendix.html" in html   # heavy/composite figs relocated to the appendix file

@@ -1,0 +1,3 @@
+tissue	query_genes	reference_genes	shared_genes	note
+breast	-	-	-	computed at run time; query=pseudobulk genes vs reference symbols
+lung	-	-	-	computed at run time

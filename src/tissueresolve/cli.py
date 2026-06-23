@@ -318,6 +318,10 @@ def _configure_from_preset(preset_params: dict[str, Any]):
     cfg = TissueResolveConfig()
     if preset_params.get("bootstrap"):
         cfg.bootstrap.n_bootstrap = preset_params.get("n_bootstrap", cfg.bootstrap.n_bootstrap)
+    else:
+        # Preset explicitly disables bootstrap — actually turn it off rather than
+        # leaving the config default (200), which would run CIs against intent.
+        cfg.bootstrap.n_bootstrap = 0
     hp = preset_params.get("hierarchical") or {}
     for k, v in hp.items():
         if hasattr(cfg.hierarchical, k):

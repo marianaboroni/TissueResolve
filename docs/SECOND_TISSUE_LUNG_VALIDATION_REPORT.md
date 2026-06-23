@@ -70,11 +70,15 @@ supported on a second tissue** (at worst non-inferior; reduces over-smoothing on
 both tissues). (One spatial seed hit the 200-iter cap at δΠ=6.7e-5 — minor.)
 
 ## Promotion status (both blockers cleared)
-1. **Soft gating: PROMOTABLE.** Passed prospective gates on **two tissues**
-   (breast 9/9, lung 8/8), donor-disjoint, mass-conserving. Recommend promoting it
-   to the hierarchical default (re-specifying the original false-resolution gate as
-   soft-vs-ungated, as recorded). **Not auto-applied** — awaiting explicit go-ahead
-   (rule: no default change without sign-off).
+1. **Soft gating: PROMOTED (default).** Passed prospective gates on **two
+   tissues** (breast 9/9, lung 8/8), donor-disjoint, mass-conserving. On explicit
+   go-ahead it is now the **default hierarchical gating mode**
+   (`hierarchical_gating="soft"`, `gating_version="soft_gating-1.0"`). The legacy
+   binary gate remains available as `hierarchical_gating="hard"` (over-abstains in
+   collinear families) and `"ungated"` is diagnostic-only. Every hierarchical run
+   records the active mode, version, mass-conservation error, unresolved-mass
+   summary, and the "validated on breast and lung benchmarks" status. See
+   `tests/test_hierarchical_gating_promotion.py`.
 2. **Weaker spatial λ (0.1→~0.02): SUPPORTED.** Generalizes to a second tissue
    (synthetic spatial). Recommend as a candidate default; ideally confirm on a
    real Visium with boundary ground truth before finalizing (modest fine-RMSE gain).

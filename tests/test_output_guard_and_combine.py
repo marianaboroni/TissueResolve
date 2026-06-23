@@ -107,6 +107,9 @@ def _fake_bulk_run(d: Path):
         d / "deconv" / "coverage_r2.tsv", sep="\t")
     (d / "qc").mkdir(exist_ok=True)
     (d / "qc" / "recommendations.txt").write_text("bulk sample s1 low R2\n")
+    figs = d / "figures"; figs.mkdir(exist_ok=True)
+    (figs / "bulk_composition.png").write_bytes(b"\x89PNG\r\n\x1a\n")  # stub png
+    (figs / "bulk_composition.data.tsv").write_text("a\tb\n1\t2\n")
     (d / "methods.txt").write_text("Bulk methods text.")
     (d / "warnings.json").write_text(json.dumps([
         {"severity": "info", "category": "estimate_type",
@@ -149,6 +152,14 @@ def test_combine_writes_bundle(tmp_path):
     assert rpt.exists() and rpt.name == "report.html"
     for f in ("report.html", "methods.txt", "warnings.json", "run_metadata.json"):
         assert (out / f).exists(), f
+
+
+def test_combine_embeds_run_figures(tmp_path):
+    rpt, _ = _combined(tmp_path)
+    doc = rpt.read_text()
+    # bulk figure from the run dir is embedded (figure-driven, not table-only)
+    assert "<img" in doc
+    assert "bulk_composition.png" in doc
 
 
 def test_combine_has_bulk_and_spatial_sections(tmp_path):

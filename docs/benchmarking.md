@@ -115,3 +115,24 @@ robustness, usability, interpretability, resolution-awareness, and
 runtime/resource (config: `benchmarks/configs/composite_score_weights.yaml`);
 only executed/imported tools are scored, and real-Visium runs exclude accuracy
 (no ground truth).
+
+## Diagnostic: fine-granularity refinement (negative result)
+
+`benchmarks/diagnostics/fine_refiner_benchmark.py` evaluates the experimental
+`FineGranularityRefiner` (contrast-weighted WNNLS / residual contrasts / spillover
+calibration) against the validated `baseline_softgate` on two tissues (breast +
+HLCA lung), donor- and seed-disjoint, with calibration/test seed separation. It
+reports conditional within-family RMSE/Pearson, fine/broad RMSE, pairwise
+spillover, rare sensitivity, false-positive rate, effective-N, mass error, and
+runtime, plus per-family conditional RMSE and the formal promotion gates.
+
+```bash
+python benchmarks/diagnostics/fine_refiner_benchmark.py --run-real-data --tissue both
+```
+
+**Result: the refiner failed the promotion gates on both tissues** and is **not
+integrated**. It lowered conditional RMSE in some settings only by **increasing
+pairwise spillover and false-positive subtype detection** (and inflating
+effective-N). Soft gating remains the final hierarchical layer. Full analysis:
+`docs/FINE_GRANULARITY_REFINER_REPORT.md`. (Outputs are written under the
+git-ignored `benchmarks/outputs/`.)

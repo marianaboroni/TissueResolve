@@ -236,3 +236,74 @@ def test_spatial_estimate_statement_does_not_claim_accuracy():
     assert "rna-derived" in stmt
     assert "do not represent direct single-cell counts" in stmt or "not" in stmt
     assert "accuracy" not in stmt
+
+
+def test_report_shows_unresolved_and_softgating_and_caveats():
+    from tissueresolve.report.result_sections import _hierarchical_html
+
+    class _R:
+        estimates = _hier(*_ref()).estimates
+    body = _hierarchical_html(_R(), "bulk").lower()
+    # unresolved mass visible, soft gating named, fine gated by trusted resolution
+    assert "unresolved" in body
+    assert "soft" in body and "gating" in body
+    assert "auroc" in body                               # cell-AUROC caveat present
+    assert "rna-derived proportions" in body             # not cell fractions
+    assert "diagnostic only" in body                     # broad_only fine = diagnostic
+
+
+def test_bulk_and_spatial_reports_use_separate_generators():
+    # bulk vs spatial reporting is dispatched to distinct generators (modality split)
+    from tissueresolve.report import orchestration as orch
+    assert hasattr(orch, "generate_bulk_report")
+    assert hasattr(orch, "generate_spatial_report")
+
+
+def test_report_states_mrna_proportion_and_thresholds_note():
+    from tissueresolve.report.result_sections import _gating_mode_html
+    html = _gating_mode_html(_hier(*_ref()).estimates).lower()
+    # estimate type is explicitly mRNA_proportion; cell fractions only with correction
+    assert "mrna_proportion" in html
+    assert "not absolute cell fractions" in html or "not</b> absolute cell fractions" in html
+    assert "mrna-content correction" in html
+    # heuristic-thresholds note links qc_thresholds.md
+    assert "heuristic" in html and "qc_thresholds.md" in html
+
+
+def test_solver_raw_weights_instrumentation_optional_and_nonmutating():
+    # opt-in raw-W_hat exposure must not change the default (normalised) output
+    import warnings
+    from tissueresolve.results import ReferenceSignature
+    from tissueresolve.bulk.solver import WNNLSSolver
+    rng = np.random.default_rng(0)
+    G = 50
+    genes = [f"g{i}" for i in range(G)]
+    R = np.abs(rng.normal(5, 2, (4, G))).astype(np.float32)
+    ref = ReferenceSignature(gene_names=genes, cell_types=list("abcd"), R_cpm=R,
+                             R_log=np.log1p(R).astype(np.float32),
+                             n_cells_per_type={c: 50 for c in "abcd"})
+    bulk = pd.DataFrame(rng.poisson(50, (G, 3)) + 1, index=genes,
+                        columns=["s0", "s1", "s2"]).astype(float)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        r0 = WNNLSSolver().solve(bulk, ref, genes)
+        r1 = WNNLSSolver().solve(bulk, ref, genes, return_raw_weights=True)
+    # default output unchanged + no raw weights leaked into the default metadata
+    np.testing.assert_allclose(r0.proportions.values, r1.proportions.values)
+    assert "raw_weights_pre_l1norm" not in r0.run_metadata
+    # opt-in: raw weights + sparsity present, normalised rows still sum to 1
+    raw = r1.run_metadata["raw_weights_pre_l1norm"]
+    spar = r1.run_metadata["raw_weight_sparsity"]
+    assert raw.shape == r1.proportions.shape
+    assert {"raw_row_sum", "n_nonzero", "n_effective"} <= set(spar.columns)
+    np.testing.assert_allclose(r1.proportions.sum(axis=1), 1.0, atol=1e-9)
+
+
+def test_full_workflow_outputs_backward_compatible_shape():
+    # the reorg adds metadata/report content but does not change the numeric
+    # output contract: combined_fine rows still sum to 1 (resolved + unresolved)
+    ref, mapping = _ref()
+    h = _hier(ref, mapping)
+    np.testing.assert_allclose(h.estimates.combined_fine.sum(axis=1), 1.0, atol=1e-6)
+    assert "trusted_resolution" in h.run_metadata
+    assert h.run_metadata["hierarchical_gating"] == "soft"

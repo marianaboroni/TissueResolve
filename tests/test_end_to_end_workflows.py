@@ -134,6 +134,10 @@ def test_bulk_end_to_end_writes_expected_outputs(tmp_path):
     assert any(w["category"] == "estimate_type" for w in warns)
     report = (out / "report.html").read_text()
     assert "mRNA" in report  # estimate-type-aware, predictions populated
+    # figures are generated and embedded (figure-driven report, not table-only)
+    figs = list((out / "figures").glob("*.png"))
+    assert figs, "run should write interpretive figures to figures/"
+    assert "data:image/png;base64" in report  # embedded in the report
 
 
 # --- spatial happy path -----------------------------------------------------

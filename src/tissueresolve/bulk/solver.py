@@ -67,6 +67,7 @@ class WNNLSSolver:
         ref: ReferenceSignature,
         gene_panel: list[str],
         gene_weights: Optional[pd.Series] = None,
+        return_raw_weights: bool = False,
     ) -> BulkDeconvResult:
         """Deconvolve all samples in *bulk*.
 
@@ -116,7 +117,11 @@ class WNNLSSolver:
         B_norm = _l1norm_cols(B)
         R_norm = _l1norm_cols(R)
 
-        W_hat = _solve_all(B_norm, R_norm, w)             # (N, K)
+        if return_raw_weights:
+            W_hat, W_raw = _solve_all(B_norm, R_norm, w, return_raw=True)
+        else:
+            W_hat = _solve_all(B_norm, R_norm, w)         # (N, K)
+            W_raw = None
         r2 = _r2_per_sample(B_norm, R_norm, W_hat)
 
         sample_ids = list(bulk.columns)
@@ -132,16 +137,30 @@ class WNNLSSolver:
             "wNNLS: %d samples, %d cell types, %d genes.  Mean R² = %.4f.",
             len(sample_ids), len(ct_labels), len(common), float(r2.mean()),
         )
+        run_metadata = {
+            "solver": "WNNLSSolver",
+            "n_genes_panel": len(common),
+            "estimate_type": "mRNA_proportion",
+        }
+        # Diagnostic instrumentation (opt-in; does NOT change the default output):
+        # expose the raw NNLS coefficients BEFORE L1-row normalisation, plus
+        # per-sample sparsity diagnostics, to debug degenerate/sparse solutions.
+        if return_raw_weights and W_raw is not None:
+            raw_df = pd.DataFrame(W_raw, index=sample_ids, columns=ct_labels)
+            run_metadata["raw_weights_pre_l1norm"] = raw_df
+            run_metadata["raw_weight_sparsity"] = pd.DataFrame({
+                "raw_row_sum": raw_df.sum(axis=1),
+                "n_nonzero": (raw_df > 0).sum(axis=1),
+                "n_effective": (raw_df.div(raw_df.sum(axis=1).where(lambda s: s > 0, np.nan),
+                                           axis=0).fillna(0.0) ** 2).sum(axis=1).rdiv(1.0).replace(
+                    [np.inf, -np.inf], 0.0),
+            })
         return BulkDeconvResult(
             proportions=props,
             coverage_r2=coverage,
             gene_panel=common,
             gene_weights=stored_w,
-            run_metadata={
-                "solver": "WNNLSSolver",
-                "n_genes_panel": len(common),
-                "estimate_type": "mRNA_proportion",
-            },
+            run_metadata=run_metadata,
         )
 
 
@@ -351,31 +370,45 @@ def _l1norm_cols(M: np.ndarray) -> np.ndarray:
     return M / col_sums
 
 
-def _solve_one(b: np.ndarray, R: np.ndarray, w: np.ndarray) -> np.ndarray:
+def _solve_one(b: np.ndarray, R: np.ndarray, w: np.ndarray,
+               return_raw: bool = False):
     """Weighted NNLS for one sample.
 
     Solves min_θ ‖√w ⊙ b − (√w ⊙ R)·θ‖², θ ≥ 0, then normalises θ to
     sum to 1.  Falls back to uniform proportions when the solution is the
     zero vector (pathological case).
+
+    When *return_raw* is True, also returns the **raw NNLS coefficients θ**
+    (before the L1-row normalisation) for sparsity/diagnostic inspection.
     """
     sqrt_w = np.sqrt(np.clip(w, 0, None))
     b_w = b * sqrt_w
     R_w = R * sqrt_w[:, None]
     theta, _ = nnls(R_w, b_w)
     total = theta.sum()
-    if total > 0:
-        return theta / total
-    return np.full(R.shape[1], 1.0 / R.shape[1])
+    norm = theta / total if total > 0 else np.full(R.shape[1], 1.0 / R.shape[1])
+    if return_raw:
+        return norm, theta
+    return norm
 
 
-def _solve_all(B: np.ndarray, R: np.ndarray, w: np.ndarray) -> np.ndarray:
-    """Solve wNNLS for all N samples.  Returns (N, K)."""
+def _solve_all(B: np.ndarray, R: np.ndarray, w: np.ndarray,
+               return_raw: bool = False):
+    """Solve wNNLS for all N samples.  Returns (N, K) proportions.
+
+    When *return_raw* is True, returns ``(W, W_raw)`` where ``W_raw`` holds the
+    raw NNLS coefficients before L1-row normalisation (diagnostic only).
+    """
     N = B.shape[1]
     K = R.shape[1]
     W = np.zeros((N, K))
+    W_raw = np.zeros((N, K)) if return_raw else None
     for n in range(N):
-        W[n] = _solve_one(B[:, n], R, w)
-    return W
+        if return_raw:
+            W[n], W_raw[n] = _solve_one(B[:, n], R, w, return_raw=True)
+        else:
+            W[n] = _solve_one(B[:, n], R, w)
+    return (W, W_raw) if return_raw else W
 
 
 def _r2_per_sample(

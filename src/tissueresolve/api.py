@@ -153,6 +153,11 @@ def deconv_bulk(
             hcfg, "within_family_spillover_threshold", 0.30),
         allow_partial_resolution=getattr(hcfg, "allow_partial_resolution", True),
         subtype_confidence_threshold=getattr(hcfg, "subtype_confidence_threshold", 0.10),
+        # Soft gating is the default hierarchical mode. Configs that predate this
+        # field (no `hierarchical_gating`) fall back to "soft" but the run
+        # metadata records the resolved mode (see assemble_hierarchical_estimates).
+        hierarchical_gating=getattr(hcfg, "hierarchical_gating", "soft"),
+        gating_version=getattr(hcfg, "gating_version", "soft_gating-1.0"),
     )
     # Explicit gating kwargs override the cfg-derived defaults (avoids a
     # duplicate-keyword collision when callers pass e.g. min_discriminating_genes).
@@ -317,7 +322,13 @@ def deconv_spatial(
             hcfg, "within_family_spillover_threshold", 0.30),
         allow_partial_resolution=getattr(hcfg, "allow_partial_resolution", True),
         subtype_confidence_threshold=getattr(hcfg, "subtype_confidence_threshold", 0.10),
+        # Soft gating is the default hierarchical mode (see deconv_bulk).
+        hierarchical_gating=getattr(hcfg, "hierarchical_gating", "soft"),
+        gating_version=getattr(hcfg, "gating_version", "soft_gating-1.0"),
     )
+    for _k in list(kwargs):
+        if _k in gate:
+            gate[_k] = kwargs.pop(_k)
     return run_hierarchical_spatial(
         Y, ref, array_row, array_col, lib_sizes, gene_names, mapping,
         spot_ids, config=cfg, **gate, **kwargs)

@@ -1,0 +1,7 @@
+method	normalization
+NNLS/WNNLS/TissueResolve	CPM / L1-normalised signature+query
+MuSiC	raw counts (MuSiC internal weighting)
+BisqueRNA	raw counts (Bisque internal)
+BayesPrism	raw counts
+cell2location	raw counts (NB model)
+RCTD/CARD	raw counts (tool internal)

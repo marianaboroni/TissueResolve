@@ -90,6 +90,43 @@ def _read_methods(run_dir: Path) -> str:
     return ""
 
 
+def _embed_figures(run_dir: Path, out_dir: Path) -> str:
+    """Embed a run directory's interpretive figures (``figures/*.png``, with
+    interactive ``.html`` and ``.data.tsv`` linked) as figure cards. Returns an
+    empty string when the run produced no figures."""
+    fig_dir = run_dir / "figures"
+    if not fig_dir.is_dir():
+        return ""
+    rel = lambda p: os.path.relpath(p, out_dir)  # noqa: E731
+    pngs = sorted(fig_dir.glob("*.png"))
+    if not pngs:
+        return ""
+    cards = []
+    for png in pngs:
+        title = png.stem.replace("_", " ").strip().capitalize()
+        links = []
+        for ext in ("html", "pdf", "svg"):
+            alt = png.with_suffix("." + ext)
+            if alt.exists():
+                links.append((ext.upper() if ext != "html" else "interactive",
+                              rel(alt)))
+        data = png.with_suffix(".data.tsv")
+        if data.exists():
+            links.append(("source data (.tsv)", rel(data)))
+        link_html = " ".join(f"<a href='{T.escape(h)}'>{T.escape(l)}</a>"
+                             for l, h in links)
+        cards.append(
+            f"<figure style='margin:12px 0'>"
+            f"<figcaption style='font-weight:600'>{T.escape(title)}</figcaption>"
+            f"<img src='{T.escape(rel(png))}' alt='{T.escape(title)}' "
+            "style='max-width:100%;height:auto;border:1px solid #e3e8ef;"
+            "border-radius:6px'/>"
+            + (f"<div class='links' style='font-size:12px'>{link_html}</div>"
+               if link_html else "")
+            + "</figure>")
+    return "<h3>Figures</h3>" + "".join(cards)
+
+
 def _find_benchmark(run_dir: Path) -> Optional[Path]:
     """A benchmark artifact inside the run dir, if any (benchmarks are normally
     produced separately under benchmarks/outputs/, so usually absent here)."""
@@ -185,6 +222,7 @@ def generate_combined_report(bulk_dir, spatial_dir, out_dir) -> Path:
         bulk_body.append(T.df_table(b_props, max_rows=20))
     else:
         bulk_body.append("<p>No bulk prediction table found.</p>")
+    bulk_body.append(_embed_figures(bulk_dir, out_dir))
     b_recon = assets.read_tsv(bulk_dir / "deconv" / "coverage_r2.tsv")
     if b_recon is not None:
         bulk_body.append("<h3>Reconstruction QC</h3>" + T.df_table(b_recon, max_rows=20))
@@ -204,6 +242,7 @@ def generate_combined_report(bulk_dir, spatial_dir, out_dir) -> Path:
         sp_body.append(T.df_table(s_props, max_rows=20))
     else:
         sp_body.append("<p>No spatial prediction table found.</p>")
+    sp_body.append(_embed_figures(spatial_dir, out_dir))
     morans = assets.find_table(spatial_dir, "morans_i.tsv") \
         or assets.read_tsv(spatial_dir / "qc" / "morans_i.tsv")
     if morans is not None:

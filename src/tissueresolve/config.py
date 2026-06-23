@@ -326,6 +326,15 @@ class HierarchicalConfig:
     # ambiguous remainder as unresolved_<family> (not all-or-nothing).
     allow_partial_resolution: bool = True
     subtype_confidence_threshold: float = 0.10
+    # Gating mode for hierarchical inference (validated on breast + lung benchmarks):
+    #   "soft"    — DEFAULT. Partial confidence-weighted unresolved mass: each
+    #               subtype's mass is multiplied by a calibrated confidence in
+    #               [0,1] and the residual family mass goes to unresolved_<family>.
+    #   "hard"    — LEGACY. Binary threshold gate (confident subtypes keep full
+    #               mass, the rest are zeroed). Over-abstains in collinear families.
+    #   "ungated" — DIAGNOSTIC only. No abstention; not calibrated.
+    hierarchical_gating: str = "soft"
+    gating_version: str = "soft_gating-1.0"
 
 
 # ---------------------------------------------------------------------------

@@ -39,19 +39,45 @@ import _harness as H
 
 # Composite multi-panel "main summary" figures are kept OUT of the primary
 # figure grid and shown only in a collapsible technical appendix.
+# --- QC-first main-report figure routing (REPORT_RESTRUCTURING_PLAN.md) -------
+# The main report keeps ONLY figures that help judge prediction reliability or
+# interpret the final prediction (~18 figures total). Everything else → the
+# technical appendix. Generic multi-panel "main summary" figures are never in
+# the main flow.
 _SUMMARY_FIGS = {"bulk_main_summary_figure", "spatial_main_summary_figure"}
 
-# Heavy/technical figures kept OUT of the primary grid and shown only in a
-# collapsible technical appendix (report-simplification audit, Part 5):
-# full separability/spillover heatmaps, spillover networks, the signature
-# heatmap and exploratory per-spot pies duplicate or out-detail the cleaner
-# primary plots.
+# §2 Reference and signature quality (MAIN)
+_REFERENCE_MAIN_FIGS = {"reference_suitability_components",
+                        "reference_broad_family_composition"}
+_SIGNATURE_MAIN_FIGS = {"top_confusable_pairs",
+                        "within_vs_between_family_separability"}
+# §3 Input compatibility (MAIN) — lives in the reference figures dir
+_INPUT_FIGS = {"gene_overlap_by_modality"}
+# §4 Trusted resolution and uncertainty (MAIN)
+_RESOLUTION_MAIN_FIGS = {"trusted_resolution_summary", "unresolved_mass_by_family"}
+# §7/§8 Benchmark (MAIN) — one figure each; bulk has truth, spatial does not
+_BULK_BENCH_MAIN_FIGS = {"bulk_fine_accuracy_leaderboard"}
+_SPATIAL_BENCH_MAIN_FIGS = {"spatial_structure_metrics_summary"}
+
+# Technical/exploratory figures → technical appendix only.
+_REFERENCE_APPENDIX_FIGS = {"reference_celltype_imbalance",
+                            "reference_fine_subpopulation_support"}
+_SIGNATURE_APPENDIX_FIGS = {"signature_matrix_heatmap", "hierarchy_map",
+                            "marker_support_by_family"}
+_RESOLUTION_APPENDIX_FIGS = {"separability_distribution"}
 _BULK_APPENDIX_FIGS = {"bulk_separability_heatmap", "bulk_spillover_heatmap",
                        "spillover_network", "bulk_main_summary_figure"}
+# per-type H&E abundance panels (he_abundance_*) and the spot-alignment check are
+# exploratory; the combined abundance maps + dominant maps stay in MAIN.
 _SPATIAL_APPENDIX_FIGS = {"spatial_separability_heatmap", "spatial_spillover_heatmap",
                           "spillover_network", "spatial_spot_pie_charts",
-                          "spatial_main_summary_figure"}
-_SIGNATURE_APPENDIX_FIGS = {"signature_matrix_heatmap"}
+                          "spatial_main_summary_figure", "he_spots_check",
+                          "he_abundance_*"}
+# Deliberate spatial figure flow: tissue-wide composition → H&E dominant →
+# coordinate dominant map → abundance maps → spatial structure.
+_SPATIAL_MAIN_ORDER = ["spatial_mean_composition_barplot", "he_dominant_cell_type",
+                       "spatial_dominant_cell_type_map", "spatial_abundance_maps",
+                       "spatial_morans_i_barplot"]
 
 
 def _read_tsv(p: Path):
@@ -712,13 +738,26 @@ def _caption_for(stem: str, section: str, captions: dict) -> dict:
     }
 
 
+def _fig_match(stem, patterns) -> bool:
+    """Match *stem* against a set of figure ids; an id ending in ``*`` is a
+    prefix pattern (e.g. ``he_abundance_*`` matches every per-type H&E panel)."""
+    for p in patterns:
+        if p.endswith("*"):
+            if stem.startswith(p[:-1]):
+                return True
+        elif stem == p:
+            return True
+    return False
+
+
 def _figure_cards(fig_dir, out_dir, manifest, section, captions,
-                  *, exclude=None, only=None):
+                  *, exclude=None, only=None, order=None):
     """Build figure cards for figure HTML in *fig_dir*, register in manifest.
 
-    *exclude*: iterable of figure stems to skip (e.g. composite "main summary"
-    figures kept out of the primary grid).  *only*: if given, render ONLY these
-    stems (used for the technical-diagnostics appendix).
+    *exclude*: figure stems to skip (exact, or ``prefix*``).  *only*: if given,
+    render ONLY these stems (exact or ``prefix*``).  *order*: optional list of
+    stems emitted first, in that order (the rest follow alphabetically) — used to
+    give the main report a deliberate figure flow.
     """
     from tissueresolve.report import components as C
     from tissueresolve.report.figures import FigureRecord
@@ -729,12 +768,20 @@ def _figure_cards(fig_dir, out_dir, manifest, section, captions,
         return ""
     exclude = set(exclude or [])
     only = set(only) if only is not None else None
+    order = list(order or [])
+
+    def _sort_key(fh):
+        try:
+            return (order.index(fh.stem), fh.stem)
+        except ValueError:
+            return (len(order), fh.stem)
+
     rel = lambda p: os.path.relpath(p, out_dir)  # noqa: E731
     cards = []
-    for fh in sorted(fig_dir.glob("*.html")):
-        if fh.stem in exclude:
+    for fh in sorted(fig_dir.glob("*.html"), key=_sort_key):
+        if _fig_match(fh.stem, exclude):
             continue
-        if only is not None and fh.stem not in only:
+        if only is not None and not _fig_match(fh.stem, only):
             continue
         stem = fh.stem
         cap = _caption_for(stem, section, captions)
@@ -1167,7 +1214,20 @@ def generate_unified_report() -> Path:
         guide_bits.append(
             "Fine-level separability is limited — prefer family-level results "
             "where subtypes are not separable.")
-    summ = (C.estimate_note(
+    # Self-identifying data-source banner so this report is never mistaken for
+    # the real-data (TCGA TNBC) analysis: here BULK = pseudobulk mixtures with
+    # known ground truth (method validation), SPATIAL = a real 10x Visium section.
+    _combined = H.OUTPUTS_DIR / "combined_tnbc" / "report.html"
+    _src_banner = (
+        "<b>Data in this report.</b> BULK = pseudobulk mixtures with <b>known "
+        "ground truth</b> (method validation, e.g. <code>easy_/medium_/hard_</code> "
+        "samples); SPATIAL = a real 10x Visium breast-cancer section.")
+    if _combined.exists():
+        _src_banner += (" For the <b>real TCGA-BRCA TNBC</b> bulk + Visium analysis, "
+                        "open <a href='combined_tnbc/report.html'>combined_tnbc/"
+                        "report.html</a>.")
+    summ = (C.estimate_note(_src_banner)
+            + C.estimate_note(
                 "<b>Analysis status.</b> The cards below are quality-control "
                 "verdicts, not biological conclusions.")
             + status_cards
@@ -1186,67 +1246,45 @@ def generate_unified_report() -> Path:
                                     "<pre>" + C.esc(_read_text(md)) + "</pre>")
     sections.append(Section("summary", "1. Executive decision summary", summ))
 
-    # ---- 2. Reference quality ----
-    refq = C.methodology_summary([
+    # ===================================================================
+    # QC-FIRST main report (REPORT_RESTRUCTURING_PLAN.md): 10 sections.
+    # All reference/signature/input/resolution QC appears BEFORE predictions;
+    # predictions before benchmarks; only reliability/interpretation figures
+    # stay in the main flow — everything else → technical appendix.
+    # ===================================================================
+
+    # ---- 2. Reference and signature quality (merged; QC, BEFORE predictions) ----
+    refsig = C.methodology_summary([
         "Reference built from a single-cell/nucleus h5ad by aggregating per-cell "
-        "profiles into per-cell-type signatures (CPM).",
-        "Broad and fine labels taken from the documented hierarchy mapping; gene "
-        "identifiers harmonized to symbols.",
-        "Minimum cells per type enforced; cross-donor variability recorded when "
-        "multiple donors are present.",
+        "profiles into per-cell-type signatures (CPM); gene identifiers harmonized "
+        "to symbols; minimum cells per type enforced.",
+        "Signatures answer 'can the expected cell types be told apart?' — pairwise "
+        "separability (1 − Bhattacharyya) and hierarchy usability are checked "
+        "BEFORE any prediction is interpreted.",
     ])
     if suit is not None:
         try:
-            refq += (f"<p>Overall suitability: {C.status_badge(suit.classification)} "
-                     f"(score {suit.overall_score})</p>"
-                     + C.collapsible_table("Suitability components",
-                                           suit.components_frame().to_html(border=0)))
+            refsig += (f"<p>Overall reference suitability: "
+                       f"{C.status_badge(suit.classification)} "
+                       f"(score {suit.overall_score})</p>"
+                       + C.collapsible_table("Suitability components",
+                                             suit.components_frame().to_html(border=0)))
         except Exception:
             pass
-    refq += _figure_cards(H.OUT_REFERENCE_DIR / "figures", out_dir, manifest,
-                          "reference", _CAPTIONS)
-    refq += C.variable_dictionary(G.subset(["separability", "spillover", "gene overlap"]))
-    refq += C.interpretation_guide(
-        "Use this section to decide whether your reference is balanced, compatible "
-        "with your query, and sufficiently annotated. CAUTION/WARNING/FAIL flags "
-        "highlight components to check before trusting fine predictions.")
-    sections.append(Section("reference", "2. Reference quality", refq,
-                            links=[("reference tables", rel(H.OUT_REFERENCE_DIR))]))
-
-    # ---- 3. Signature quality & hierarchy (QC, BEFORE any result) ----
-    sig = C.methodology_summary([
-        "Pairwise separability is computed from the reference expression profiles "
-        "(1 − Bhattacharyya coefficient); higher = more distinguishable.",
-        "Hierarchy usability checks whether broad families can be split into "
-        "reliably separable fine subtypes.",
-        "This section answers 'are the signatures good enough to tell cell types "
-        "apart?' and must be read BEFORE the deconvolution results.",
-    ])
+    # MAIN reference figures: suitability components + broad-family composition.
+    refsig += _figure_cards(H.OUT_REFERENCE_DIR / "figures", out_dir, manifest,
+                            "reference", _CAPTIONS, only=_REFERENCE_MAIN_FIGS)
+    # MAIN signature figures: top confusable pairs + within/between separability.
     if suit is not None:
-        sig += ("<p>Signature separability: "
-                f"{C.status_badge(_component_status(suit, 'fine_label_separability', 'UNKNOWN'))}"
-                " &nbsp; Hierarchy quality: "
-                f"{C.status_badge(_component_status(suit, 'hierarchy_quality', 'UNKNOWN'))}"
-                "</p>")
-    # Signature-QC figures (confusable pairs, within/between, hierarchy, marker
-    # support) — visual summaries before the raw table.  The large signature
-    # matrix heatmap is routed to the technical appendix.
-    sig += _figure_cards(H.OUTPUTS_DIR / "signature" / "figures", out_dir,
-                         manifest, "signature", _CAPTIONS,
-                         exclude=_SIGNATURE_APPENDIX_FIGS)
-    _sig_appendix = _figure_cards(H.OUTPUTS_DIR / "signature" / "figures", out_dir,
-                                  manifest, "signature", _CAPTIONS,
-                                  only=_SIGNATURE_APPENDIX_FIGS)
-    if _sig_appendix:
-        appendix_sections.append(Section(
-            "appx_signature", "Signatures — full signature matrix heatmap",
-            "<p class='muted'>Large gene × cell-type heatmap (the confusable-pairs "
-            "and recommended-resolution summaries in the main report are the "
-            "actionable views).</p>" + _sig_appendix))
-        sig += ("<p class='muted'>Full signature matrix heatmap → "
-                "<a href='technical_appendix.html#appx_signature'>technical "
-                "appendix</a>.</p>")
-    # Top confusable pairs (compact view; full table is source data)
+        refsig += ("<p>Signature separability: "
+                   f"{C.status_badge(_component_status(suit, 'fine_label_separability', 'UNKNOWN'))}"
+                   " &nbsp; Hierarchy quality: "
+                   f"{C.status_badge(_component_status(suit, 'hierarchy_quality', 'UNKNOWN'))}"
+                   "</p>")
+    refsig += _figure_cards(H.OUTPUTS_DIR / "signature" / "figures", out_dir,
+                            manifest, "signature", _CAPTIONS,
+                            only=_SIGNATURE_MAIN_FIGS)
+    # Compact "most confusable pairs" table (full table is source data).
     sep_p = H.OUTPUTS_DIR / "resolution" / "pairwise_separability.tsv"
     if sep_p.exists():
         try:
@@ -1257,43 +1295,47 @@ def generate_unified_report() -> Path:
                 else ("bhattacharyya" if "bhattacharyya" in sdf.columns else keep[0])
             asc = sort_col == "separability_score"
             top = sdf.sort_values(sort_col, ascending=asc)[keep].head(15)
-            sig += ("<p class='muted'>The 15 hardest-to-distinguish cell-type "
-                    f"pairs (of {len(sdf)} total). Low separability means fine "
-                    "labels for these types are unreliable.</p>")
-            sig += C.collapsible_table(
+            refsig += ("<p class='muted'>The 15 hardest-to-distinguish cell-type "
+                       f"pairs (of {len(sdf)} total). Low separability means fine "
+                       "labels for these types are unreliable.</p>")
+            refsig += C.collapsible_table(
                 "15 most confusable cell-type pairs",
                 top.to_html(index=False, border=0), open=True)
         except Exception:
             pass
-    # Hierarchy usability summary
-    if hs:
-        fams = hs.get("families") or []
-        unres = (hs.get("bulk_unresolved_families")
-                 or hs.get("spatial_unresolved_families") or [])
-        sig += C.metric_grid({
-            "Broad families": len(fams) or "—",
-            "Fine subpopulations": hs.get("n_fine", ctx["fine"]),
-            "Families resolved to subtypes": (len(fams) - len(unres)) if fams else "—",
-            "Families kept at family level": len(unres) or "—",
-        })
-        if unres:
-            sig += C.warning_box([
-                "These families cannot be split into separable subtypes at this "
-                "reference's resolution and are reported at the family level "
-                "(unresolved mass): " + ", ".join(map(str, unres)) + "."])
-    sig += C.variable_dictionary(G.subset(["separability", "spillover", "unresolved mass"]))
-    sig += _state_aware_subsection(C)
-    sig += C.interpretation_guide(
-        "If signature separability is CAUTION/WARNING/FAIL, or a family is listed "
-        "as unresolved, interpret those cell types at the family level rather than "
-        "as confident subtypes. Fine subtype labels should be treated cautiously "
-        "when separability is low.")
-    siglinks = [("resolution outputs", rel(H.OUTPUTS_DIR / "resolution"))] \
-        if (H.OUTPUTS_DIR / "resolution").exists() else []
-    sections.append(Section("signature", "3. Signature quality & hierarchy",
-                            sig, links=siglinks))
+    refsig += C.variable_dictionary(G.subset(["separability", "spillover", "gene overlap"]))
+    refsig += _state_aware_subsection(C)
+    refsig += C.interpretation_guide(
+        "<b>What to check:</b> is the reference balanced and compatible, and can "
+        "the signatures separate the expected cell types? CAUTION/WARNING/FAIL "
+        "suitability or low separability means fine subtype labels should be read "
+        "cautiously (at the family level).")
+    # Reference + signature detailed diagnostics → appendix.
+    _ref_appx = _figure_cards(H.OUT_REFERENCE_DIR / "figures", out_dir, manifest,
+                              "reference", _CAPTIONS, only=_REFERENCE_APPENDIX_FIGS)
+    _sig_appx = _figure_cards(H.OUTPUTS_DIR / "signature" / "figures", out_dir,
+                              manifest, "signature", _CAPTIONS,
+                              only=_SIGNATURE_APPENDIX_FIGS)
+    if _ref_appx or _sig_appx:
+        appendix_sections.append(Section(
+            "appx_refsig",
+            "Reference & signature — detailed diagnostics",
+            "<p class='muted'>Cell-type imbalance, fine-subpopulation support, the "
+            "hierarchy map, marker support and the full signature-matrix heatmap. "
+            "The main report keeps only the suitability, composition, confusable-"
+            "pairs and within/between-separability views needed to judge "
+            "reliability.</p>" + _ref_appx + _sig_appx))
+        refsig += ("<p class='muted'>Reference imbalance/support, hierarchy map, "
+                   "marker support and the full signature heatmap → "
+                   "<a href='technical_appendix.html#appx_refsig'>technical "
+                   "appendix</a>.</p>")
+    refsig_links = [("reference tables", rel(H.OUT_REFERENCE_DIR))]
+    if (H.OUTPUTS_DIR / "signature").exists():
+        refsig_links.append(("signature outputs", rel(H.OUTPUTS_DIR / "signature")))
+    sections.append(Section("reference", "2. Reference and signature quality",
+                            refsig, links=refsig_links))
 
-    # ---- 4. Input data ----
+    # ---- 3. Input compatibility ----
     inp = C.methodology_summary([
         "Bulk: pseudobulk count mixtures with known ground-truth proportions.",
         "Spatial: a 10x Visium section (counts + array coordinates; H&E when present).",
@@ -1301,12 +1343,80 @@ def generate_unified_report() -> Path:
         "silently re-normalized.",
     ]) + C.metric_grid({"Bulk samples": ctx["samples"], "Spatial spots": ctx["spots"],
                         "Gene overlap": ctx["overlap"]})
+    inp += _figure_cards(H.OUT_REFERENCE_DIR / "figures", out_dir, manifest,
+                         "input", _CAPTIONS, only=_INPUT_FIGS)
     inp += C.interpretation_guide(
-        "Check that gene overlap is high and that the input type/normalization "
-        "matches expectations before interpreting predictions.")
-    sections.append(Section("input", "4. Input data quality", inp))
+        "<b>What to check:</b> is the query compatible? Gene overlap should be high "
+        "and the input type/normalization should match expectations before "
+        "predictions are trusted.")
+    sections.append(Section("input", "3. Input compatibility", inp))
 
-    # ---- 4. Bulk ----
+    # ---- 4. Trusted resolution and uncertainty (merged hierarchical + resolution;
+    #         placed BEFORE predictions so the trusted level is decided first) ----
+    res_dir = H.OUT_RESOLUTION_DIR
+    hier_dir = H.OUTPUTS_DIR / "hierarchical"
+    tres = C.methodology_summary([
+        "Decide which resolution to trust BEFORE reading predictions: broad "
+        "families, selected separable fine subtypes, or full fine.",
+        "Broad-to-fine: estimate broad families first, then fine subpopulations; "
+        "confident subtypes receive mass, the ambiguous remainder is reported as "
+        "unresolved_<family>.",
+        "Per-family separability and unresolved mass mark where fine labels are "
+        "unreliable and should be read at the family level.",
+    ])
+    # MAIN resolution figures: trusted-resolution summary + unresolved mass.
+    tres += _figure_cards(res_dir / "figures", out_dir, manifest, "resolution",
+                          _CAPTIONS, only=_RESOLUTION_MAIN_FIGS,
+                          order=["trusted_resolution_summary",
+                                 "unresolved_mass_by_family"])
+    # Hierarchy usability summary (recommended interpretation level by family).
+    if hs:
+        fams = hs.get("families") or []
+        unres = (hs.get("bulk_unresolved_families")
+                 or hs.get("spatial_unresolved_families") or [])
+        tres += C.metric_grid({
+            "Broad families": len(fams) or "—",
+            "Fine subpopulations": hs.get("n_fine", ctx["fine"]),
+            "Families resolved to subtypes": (len(fams) - len(unres)) if fams else "—",
+            "Families kept at family level": len(unres) or "—",
+        })
+        if unres:
+            tres += C.warning_box([
+                "Recommended interpretation level — these families cannot be split "
+                "into separable subtypes at this reference's resolution and are "
+                "reported at the family level (unresolved mass): "
+                + ", ".join(map(str, unres)) + "."])
+    hmd = hier_dir / "hierarchical_summary.md"
+    if hmd.exists():
+        tres += C.collapsible_table("Hierarchical summary",
+                                    "<pre>" + C.esc(_read_text(hmd)) + "</pre>")
+    tres += _df_collapsible("Within-family resolvability QC",
+                            hier_dir / "hierarchical_qc.tsv")
+    tres += _df_collapsible("Top non-separable pairs",
+                            res_dir / "pairwise_separability.tsv")
+    tres += C.variable_dictionary(G.subset(["separability", "spillover", "unresolved mass"]))
+    tres += C.interpretation_guide(
+        "<b>What to check:</b> which resolution can you trust? Families with many "
+        "non-separable subtypes (or listed as unresolved) should be interpreted at "
+        "the broad level; trust a fine subtype only where separability is high.")
+    _res_appx = _figure_cards(res_dir / "figures", out_dir, manifest, "resolution",
+                              _CAPTIONS, only=_RESOLUTION_APPENDIX_FIGS)
+    if _res_appx:
+        appendix_sections.append(Section(
+            "appx_resolution", "Resolution — separability distribution",
+            "<p class='muted'>Full separability distribution (the trusted-"
+            "resolution summary and confusable pairs in the main report are the "
+            "actionable views).</p>" + _res_appx))
+        tres += ("<p class='muted'>Full separability distribution → "
+                 "<a href='technical_appendix.html#appx_resolution'>technical "
+                 "appendix</a>.</p>")
+    tres_links = [("resolution outputs", rel(res_dir))] if res_dir.exists() else []
+    if hier_dir.exists():
+        tres_links.append(("hierarchical tables", rel(hier_dir)))
+    sections.append(Section("resolution", "4. Trusted resolution and uncertainty",
+                            tres, links=tres_links))
+
+    # ---- 5. Final bulk predictions ----
     bulk = C.methodology_summary([
         "Solver backbone selected automatically (solver=auto) by gene-masking "
         "cross-validation; the chosen backbone is recorded.",
@@ -1331,14 +1441,15 @@ def generate_unified_report() -> Path:
                             H.OUT_BULK_DIR / "bulk_estimated_proportions.tsv")
     bulk += C.variable_dictionary(G.subset(["mRNA-derived proportion", "coverage R²", "unresolved mass"]))
     bulk += C.interpretation_guide(
-        "Use this section to compare composition across samples. Check whether "
-        "clustering matches expected sample groups and whether high-risk or "
-        "high-spillover populations dominate a sample.")
+        "<b>What to check / interpret:</b> compare composition across samples and "
+        "whether clustering matches expected sample groups; per-sample QC flags "
+        "low-reliability samples; treat high-spillover / non-separable populations "
+        "at the family level.")
     blinks = [("detailed bulk report", rel(H.OUT_BULK_DIR / "report.html"))] \
         if (H.OUT_BULK_DIR / "report.html").exists() else []
-    sections.append(Section("bulk", "5. Bulk deconvolution", bulk, links=blinks))
+    sections.append(Section("bulk", "5. Final bulk predictions", bulk, links=blinks))
 
-    # ---- 5. Spatial ----
+    # ---- 6. Final spatial predictions ----
     he_present = any((H.OUT_SPATIAL_DIR / "figures").glob("*he*")) if (H.OUT_SPATIAL_DIR / "figures").exists() else False
     spat = C.methodology_summary([
         "Counts deconvolved per spot with an NB-CAR model; spatial smoothing "
@@ -1350,79 +1461,38 @@ def generate_unified_report() -> Path:
     ])
     spat += _figure_cards(H.OUT_SPATIAL_DIR / "figures", out_dir, manifest,
                           "spatial", _CAPTIONS,
-                          exclude=_SUMMARY_FIGS | _SPATIAL_APPENDIX_FIGS)
+                          exclude=_SUMMARY_FIGS | _SPATIAL_APPENDIX_FIGS,
+                          order=_SPATIAL_MAIN_ORDER)
     _spat_appendix = _figure_cards(
         H.OUT_SPATIAL_DIR / "figures", out_dir, manifest, "spatial", _CAPTIONS,
         only=_SPATIAL_APPENDIX_FIGS)
     if _spat_appendix:
         appendix_sections.append(Section(
             "appx_spatial", "Spatial — full separability/spillover heatmaps, "
-            "spillover network, composite summary, exploratory per-spot pies",
+            "spillover network, exploratory per-spot pies and per-type H&E panels",
             "<p class='muted'>Technical and exploratory spatial figures (the "
             "primary maps in the main report present the actionable information; "
-            "per-spot pies are exploratory only).</p>" + _spat_appendix))
-        spat += ("<p class='muted'>Full spatial separability/spillover heatmaps, "
-                 "network and exploratory per-spot pies → "
+            "per-spot pies and per-type H&E abundance panels are exploratory).</p>"
+            + _spat_appendix))
+        spat += ("<p class='muted'>Full spatial heatmaps/network, per-spot pies and "
+                 "per-type H&E panels → "
                  "<a href='technical_appendix.html#appx_spatial'>technical "
                  "appendix</a>.</p>")
     spat += C.variable_dictionary(G.subset(["entropy", "dominant fraction", "near-zero fraction", "Moran's I"]))
     spat += C.interpretation_guide(
-        "Use this section to inspect where predicted RNA-derived compositions "
-        "localize in tissue. Compare overlays with H&E morphology, but do not "
-        "treat predictions as direct cell counts.")
+        "<b>What to check / interpret:</b> where predicted RNA-derived compositions "
+        "localize in tissue; compare the dominant-type and abundance maps with H&E "
+        "morphology and Moran's I (spatial structure). Do not treat predictions as "
+        "direct cell counts, and do not read accuracy into them (no ground truth).")
     if he_present:
         spat = "<p class='muted'>H&E overlay figures are included below.</p>" + spat
     slinks = [("detailed spatial report", rel(H.OUT_SPATIAL_DIR / "report.html"))] \
         if (H.OUT_SPATIAL_DIR / "report.html").exists() else []
-    sections.append(Section("spatial", "6. Spatial deconvolution", spat, links=slinks))
-
-    # ---- 6. Hierarchical ----
-    hier_dir = H.OUTPUTS_DIR / "hierarchical"
-    hier = C.methodology_summary([
-        "Broad-to-fine strategy: estimate broad families first, then fine "
-        "subpopulations within each family.",
-        "Partial resolution: confident subtypes receive mass; ambiguous remainder "
-        "is reported as unresolved_<family>.",
-        "Fine subtype estimates in low-separability families should be treated "
-        "cautiously (interpret at the family level).",
-    ])
-    hmd = hier_dir / "hierarchical_summary.md"
-    if hmd.exists():
-        hier += C.collapsible_table("Hierarchical summary",
-                                    "<pre>" + C.esc(_read_text(hmd)) + "</pre>", open=True)
-    hier += _df_collapsible("Within-family resolvability QC",
-                            hier_dir / "hierarchical_qc.tsv")
-    hier += C.variable_dictionary(G.subset(["unresolved mass", "separability", "spillover"]))
-    hier += C.interpretation_guide(
-        "Use this section to see which families could be split into reliable "
-        "subtypes and which are reported at the family level (unresolved mass).")
-    hlinks = [("hierarchical tables", rel(hier_dir))] if hier_dir.exists() else []
-    sections.append(Section("hierarchical", "7. Hierarchical broad→fine deconvolution",
-                            hier, links=hlinks))
-
-    # ---- 7. Resolution / separability / spillover ----
-    res_dir = H.OUT_RESOLUTION_DIR
-    resb = C.methodology_summary([
-        "Pairwise separability computed from the reference expression profiles "
-        "(1 − Bhattacharyya coefficient).",
-        "High-risk pairs (BC > 0.90) and per-family resolution summaries highlight "
-        "where fine labels are unreliable.",
-    ])
-    resb += _figure_cards(res_dir / "figures", out_dir, manifest,
-                          "resolution", _CAPTIONS)
-    resb += _df_collapsible("Top non-separable pairs",
-                            res_dir / "pairwise_separability.tsv")
-    resb += C.variable_dictionary(G.subset(["separability", "spillover", "unresolved mass"]))
-    resb += C.interpretation_guide(
-        "Use this to judge what resolution you can trust: families with many "
-        "non-separable subtypes should be interpreted at the broad level.")
-    rlinks = [("resolution outputs", rel(res_dir))] if res_dir.exists() else []
-    sections.append(Section("resolution", "8. Resolution, separability & spillover",
-                            resb, links=rlinks))
+    sections.append(Section("spatial", "6. Final spatial predictions", spat, links=slinks))
 
     bench_links = [("benchmark summary report", rel(bench))] if bench.exists() else []
 
-    # ---- 9. Bulk benchmark (accuracy — ground truth available) ----
+    # ---- 7. Bulk benchmark summary (accuracy — ground truth available) ----
     bbk = C.methodology_summary([
         "Bulk pseudobulk mixtures have KNOWN ground truth, so accuracy metrics "
         "(Pearson, RMSE, MAE) are valid here.",
@@ -1430,19 +1500,31 @@ def generate_unified_report() -> Path:
         "ranked here.",
     ])
     bbk += _figure_cards(H.OUTPUTS_DIR / "benchmark" / "bulk" / "figures",
-                         out_dir, manifest, "bulk_benchmark", _CAPTIONS)
+                         out_dir, manifest, "bulk_benchmark", _CAPTIONS,
+                         only=_BULK_BENCH_MAIN_FIGS)
     bbk += _df_collapsible("Best-method summary (bulk)",
                            bench.parent / "bulk" / "best_method_summary.tsv")
     bbk += C.variable_dictionary(G.subset(["Pearson correlation", "RMSE"]))
     bbk += C.interpretation_guide(
-        "Bulk pseudobulk mixtures have known ground truth, so accuracy metrics "
-        "are valid here. Higher Pearson / lower RMSE-MAE is better. "
+        "<b>What the benchmark says:</b> bulk pseudobulk has known ground truth, so "
+        "accuracy is valid — higher Pearson / lower RMSE-MAE is better. "
         "Skipped/exported-only tools are not ranked.")
-    sections.append(Section("bulk_benchmark",
-                            "9. Bulk benchmark: accuracy against pseudobulk ground truth",
+    _bbk_appx = _figure_cards(H.OUTPUTS_DIR / "benchmark" / "bulk" / "figures",
+                              out_dir, manifest, "bulk_benchmark", _CAPTIONS,
+                              exclude=_BULK_BENCH_MAIN_FIGS)
+    if _bbk_appx:
+        appendix_sections.append(Section(
+            "appx_bulk_bench", "Bulk benchmark — secondary figures",
+            "<p class='muted'>RMSE/MAE, runtime and method-status figures (the "
+            "accuracy leaderboard in the main report is the headline view).</p>"
+            + _bbk_appx))
+        bbk += ("<p class='muted'>RMSE/MAE, runtime and method-status → "
+                "<a href='technical_appendix.html#appx_bulk_bench'>technical "
+                "appendix</a>.</p>")
+    sections.append(Section("bulk_benchmark", "7. Bulk benchmark summary",
                             bbk, links=bench_links))
 
-    # ---- 10. Spatial benchmark (concordance / structure — NO ground truth) ----
+    # ---- 8. Spatial benchmark summary (concordance / structure — NO ground truth) ----
     sbk = C.methodology_summary([
         "Real Visium data do not have spot-level ground truth in this benchmark; "
         "therefore these metrics evaluate CONCORDANCE and SPATIAL STRUCTURE, NOT "
@@ -1451,35 +1533,36 @@ def generate_unified_report() -> Path:
         "unless a synthetic spatial benchmark with known truth is provided.",
     ])
     sbk += _figure_cards(H.OUTPUTS_DIR / "benchmark" / "spatial" / "figures",
-                         out_dir, manifest, "spatial_benchmark", _CAPTIONS)
+                         out_dir, manifest, "spatial_benchmark", _CAPTIONS,
+                         only=_SPATIAL_BENCH_MAIN_FIGS)
     sbk += C.variable_dictionary(G.subset(["concordance", "Moran's I", "entropy",
                                            "near-zero fraction", "dominant fraction"]))
     sbk += C.interpretation_guide(
-        "These are concordance / spatial-structure metrics, not accuracy: real "
-        "Visium has no spot-level ground truth here. Use them to compare spatial "
-        "patterns and stability, not correctness.")
-    sections.append(Section("spatial_benchmark",
-                            "10. Spatial benchmark: concordance and spatial structure",
+        "<b>What the benchmark says:</b> these are concordance / spatial-structure "
+        "metrics, NOT accuracy — real Visium has no spot-level ground truth here. "
+        "Use them to compare spatial patterns and stability, not correctness.")
+    _sbk_appx = _figure_cards(H.OUTPUTS_DIR / "benchmark" / "spatial" / "figures",
+                              out_dir, manifest, "spatial_benchmark", _CAPTIONS,
+                              exclude=_SPATIAL_BENCH_MAIN_FIGS)
+    # Composite scorecard + method-status → appendix only (opinionated summary).
+    _score_appx = _figure_cards(H.OUTPUTS_DIR / "benchmark" / "scorecard" / "figures",
+                                out_dir, manifest, "benchmark_scorecard", _CAPTIONS)
+    if _sbk_appx or _score_appx:
+        appendix_sections.append(Section(
+            "appx_benchmark", "Benchmark — runtime, method status and composite "
+            "scorecard",
+            "<p class='muted'>Runtime, method-status, output-completeness and the "
+            "weighted composite SCORECARD (an opinionated multi-criteria summary, "
+            "not objective accuracy; bulk and spatial scored within their own "
+            "modality). Read measured bulk accuracy and spatial structure first.</p>"
+            + _sbk_appx + _score_appx))
+        sbk += ("<p class='muted'>Runtime, method status and the composite "
+                "scorecard → <a href='technical_appendix.html#appx_benchmark'>"
+                "technical appendix</a>.</p>")
+    sections.append(Section("spatial_benchmark", "8. Spatial benchmark summary",
                             sbk, links=bench_links))
 
-    # ---- 11. Benchmark scorecards & method status ----
-    scb = C.methodology_summary([
-        "The composite is a weighted multi-criteria SCORECARD, not an objective "
-        "accuracy ranking, and should not be used alone to select a method.",
-        "Bulk and spatial are scored within their own modality (never pooled).",
-    ])
-    scb += _figure_cards(H.OUTPUTS_DIR / "benchmark" / "scorecard" / "figures",
-                         out_dir, manifest, "benchmark_scorecard", _CAPTIONS)
-    scb += C.variable_dictionary(G.subset(["composite score"]))
-    scb += C.interpretation_guide(
-        "Read the measured bulk accuracy (section 9) and spatial structure "
-        "(section 10) FIRST; the composite scorecard is a convenience summary, "
-        "not an objective accuracy ranking.")
-    sections.append(Section("benchmark_scorecard",
-                            "11. Benchmark scorecards & method status", scb,
-                            links=bench_links))
-
-    # ---- 12. Warnings & limitations ----
+    # ---- 9. Warnings and limitations ----
     # Aggregate the run's real warnings from QC, spillover and separability
     # outputs (not just the figure-generation log) so the section is honest.
     warn_items = _collect_warnings()
@@ -1492,15 +1575,9 @@ def generate_unified_report() -> Path:
         "Fine subtype estimates in non-separable families are reported as "
         "unresolved mass; do not over-interpret them.",
     ])
-    sections.append(Section("warnings", "12. Warnings & limitations", wbody))
+    sections.append(Section("warnings", "9. Warnings and limitations", wbody))
 
-    # ---- 13. Methods ----
-    methods = H.OUT_SUMMARY_DIR / "methods.txt"
-    mbody = ("<pre>" + C.esc(_read_text(methods)) + "</pre>" if methods.exists()
-             else "<p class='muted'>Methods text not available.</p>")
-    sections.append(Section("methods", "13. Methods", mbody))
-
-    # ---- 11. Output files & source data ----
+    # ---- 10. Methods and source data (merged) ----
     # Record figures that could not be generated (missing input data) so the
     # manifest is honest rather than silently omitting them.
     from tissueresolve.report.figures import FigureRecord, STATUS_MISSING_DATA
@@ -1529,16 +1606,20 @@ def generate_unified_report() -> Path:
         "complete listing is below. The figure manifest "
         f"(<code>{C.esc(rel(man_path))}</code>) maps each figure to its data.</p>"
         + "<ul>" + "".join(f"<li>{C.esc(rel(p))}</li>" for p in out_files) + "</ul>"))
-    obody = (C.estimate_note(
-                 f"Figure manifest: {rel(man_path)} — {n_gen} figures generated, "
-                 f"{n_missing} recorded as missing_data (with reasons).")
-             + C.metric_grid({"Figures generated": n_gen,
-                              "Figures missing data": n_missing,
-                              "Source-data tables": len(out_files)})
-             + "<p>Full source-data table listing and all technical/exploratory "
-               "figures → <a href='technical_appendix.html'>technical "
-               "appendix</a>.</p>")
-    sections.append(Section("outputs", "14. Output files & source data", obody))
+    methods = H.OUT_SUMMARY_DIR / "methods.txt"
+    mbody = ("<h3>Methods</h3><pre>" + C.esc(_read_text(methods)) + "</pre>"
+             if methods.exists()
+             else "<p class='muted'>Methods text not available.</p>")
+    mbody += (C.estimate_note(
+                  f"Figure manifest: {rel(man_path)} — {n_gen} figures generated, "
+                  f"{n_missing} recorded as missing_data (with reasons).")
+              + C.metric_grid({"Figures generated": n_gen,
+                               "Figures missing data": n_missing,
+                               "Source-data tables": len(out_files)})
+              + "<p>Full source-data table listing and all technical/exploratory "
+                "figures → <a href='technical_appendix.html'>technical "
+                "appendix</a>.</p>")
+    sections.append(Section("methods", "10. Methods and source data", mbody))
 
     # --- write the separate technical appendix file ---
     if appendix_sections:
@@ -1554,8 +1635,9 @@ def generate_unified_report() -> Path:
 
     path = build_unified_report(
         out_dir / "report.html", sections,
-        title="TissueResolve — breast-cancer analysis report",
-        subtitle="RNA-derived estimates with QC, resolution limits and benchmarks")
+        title="TissueResolve — breast-cancer method-validation report",
+        subtitle="pseudobulk (ground-truth) bulk + real Visium — QC, resolution "
+                 "limits and benchmarks")
     return path
 
 

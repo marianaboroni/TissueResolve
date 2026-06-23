@@ -1,0 +1,101 @@
+tissue	fine_cell_type	broad_family
+breast	CD4-positive helper T cell	T/NK
+breast	CD4-positive, alpha-beta T cell	T/NK
+breast	CD8-positive, alpha-beta memory T cell	T/NK
+breast	IgA plasma cell	B/Plasma
+breast	T cell	T/NK
+breast	activated CD4-positive, alpha-beta T cell	T/NK
+breast	adipocyte of breast	Adipocyte
+breast	alternatively activated macrophage	Myeloid
+breast	basal cell	Epithelial
+breast	capillary endothelial cell	Endothelial
+breast	class switched memory B cell	B/Plasma
+breast	classical monocyte	Myeloid
+breast	conventional dendritic cell	Myeloid
+breast	effector memory CD4-positive, alpha-beta T cell	T/NK
+breast	effector memory CD8-positive, alpha-beta T cell	T/NK
+breast	endothelial cell of artery	Endothelial
+breast	endothelial cell of lymphatic vessel	Endothelial
+breast	endothelial cell of vascular tree	Endothelial
+breast	fibroblast	Stromal/Fibroblast
+breast	inflammatory macrophage	Myeloid
+breast	luminal epithelial cell of mammary gland	Epithelial
+breast	lymphocyte	T/NK
+breast	macrophage	Myeloid
+breast	mammary gland epithelial cell	Epithelial
+breast	mature NK T cell	T/NK
+breast	myeloid cell	Myeloid
+breast	natural killer cell	T/NK
+breast	non-classical monocyte	Myeloid
+breast	pericyte	Mural
+breast	regulatory T cell	T/NK
+breast	vascular associated smooth muscle cell	Mural
+breast	vein endothelial cell	Endothelial
+breast	IgG plasma cell	B/Plasma
+breast	naive B cell	B/Plasma
+breast	unswitched memory B cell	B/Plasma
+breast	activated CD8-positive, alpha-beta T cell	T/NK
+breast	gamma-delta T cell	T/NK
+breast	mast cell	Myeloid
+breast	myeloid dendritic cell	Myeloid
+breast	neutrophil	Myeloid
+breast	plasmacytoid dendritic cell	Myeloid
+lung	Neuroendocrine	Airway epithelium
+lung	Tuft	Airway epithelium
+lung	Mesothelium	Mesothelium
+lung	Subpleural fibroblasts	Fibroblast lineage
+lung	Migratory DCs	Myeloid
+lung	DC1	Myeloid
+lung	Smooth muscle FAM83D+	Smooth muscle
+lung	T cells proliferating	Lymphoid
+lung	SMG mucous	Submucosal Gland
+lung	Plasmacytoid DCs	Myeloid
+lung	SM activated stress response	Smooth muscle
+lung	Ionocyte	Airway epithelium
+lung	Lymphatic EC differentiating	Lymphatic EC
+lung	Myofibroblasts	Fibroblast lineage
+lung	Goblet (subsegmental)	Airway epithelium
+lung	AT2 proliferating	Alveolar epithelium
+lung	Deuterosomal	Airway epithelium
+lung	Alveolar Mph proliferating	Myeloid
+lung	Alveolar Mph MT-positive	Myeloid
+lung	SMG duct	Submucosal Gland
+lung	SMG serous (bronchial)	Submucosal Gland
+lung	AT0	Airway epithelium
+lung	SMG serous (nasal)	Submucosal Gland
+lung	Peribronchial fibroblasts	Fibroblast lineage
+lung	Goblet (bronchial)	Airway epithelium
+lung	Plasma cells	Lymphoid
+lung	Smooth muscle	Smooth muscle
+lung	Pericytes	Fibroblast lineage
+lung	Lymphatic EC mature	Lymphatic EC
+lung	pre-TB secretory	Airway epithelium
+lung	B cells	Lymphoid
+lung	Hillock-like	Airway epithelium
+lung	Interstitial Mph perivascular	Myeloid
+lung	Multiciliated (nasal)	Airway epithelium
+lung	Alveolar fibroblasts	Fibroblast lineage
+lung	EC venous pulmonary	Blood vessels
+lung	EC venous systemic	Blood vessels
+lung	Mast cells	Myeloid
+lung	EC aerocyte capillary	Blood vessels
+lung	EC arterial	Blood vessels
+lung	AT1	Alveolar epithelium
+lung	Alveolar Mph CCL3+	Myeloid
+lung	Non-classical monocytes	Myeloid
+lung	DC2	Myeloid
+lung	Club (non-nasal)	Airway epithelium
+lung	Adventitial fibroblasts	Fibroblast lineage
+lung	EC general capillary	Blood vessels
+lung	NK cells	Lymphoid
+lung	Classical monocytes	Myeloid
+lung	CD4 T cells	Lymphoid
+lung	Club (nasal)	Airway epithelium
+lung	Monocyte-derived Mph	Myeloid
+lung	CD8 T cells	Lymphoid
+lung	Multiciliated (non-nasal)	Airway epithelium
+lung	Goblet (nasal)	Airway epithelium
+lung	Basal resting	Airway epithelium
+lung	Suprabasal	Airway epithelium
+lung	AT2	Alveolar epithelium
+lung	Alveolar macrophages	Myeloid

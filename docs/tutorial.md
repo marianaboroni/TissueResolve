@@ -107,12 +107,14 @@ The `run` step writes the analysis bundle:
 - `results/bulk/qc/` — QC metrics, recommendations
 - `results/bulk/methods.txt` — auto-generated methods text
 - `results/bulk/warnings.json` — surfaced warnings
-- `results/bulk/report.html` — report generated from the run result
+- `results/bulk/figures/` — interpretive figures (PNG/PDF/SVG + `.data.tsv`)
+- `results/bulk/report.html` — figure-driven report generated from the run result
 
-`run` renders `report.html` from the in-memory result; standalone figure files
-(`figures/*.html` + `.data.tsv`) are produced by the report layer / validation
-harness. You can also (re)generate a report from a results directory with the
-`tissueresolve report` step (next).
+`run` renders a figure-driven `report.html` from the in-memory result (the
+`figures/` plots embedded). You can also (re)generate a report from a results
+directory with the `tissueresolve report` step (next). The full publication
+report with the complete diagnostic figure set comes from the validation
+harness.
 
 ## 7. Spatial analysis step-by-step
 
@@ -195,11 +197,12 @@ A `tissueresolve run` writes:
 - `qc/` — QC metrics, recommendations, Moran's I (spatial)
 - `methods.txt` — auto-generated methods text
 - `warnings.json` — surfaced warnings
-- `report.html` — report generated from the run result
+- `figures/` — interpretive figures (PNG/PDF/SVG + `.data.tsv` source data)
+- `report.html` — figure-driven report generated from the run result
 
-The report layer / validation harness additionally produce `tables/` and
-`figures/` (each with a `.data.tsv`). `report.html` can also be (re)generated
-from a results directory with `tissueresolve report` (above).
+`report.html` can also be (re)generated from a results directory with
+`tissueresolve report` (above). The validation harness additionally produces the
+full diagnostic figure set, a `tables/` listing and a technical appendix.
 
 ## 10. Understanding figures
 

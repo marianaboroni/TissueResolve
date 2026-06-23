@@ -395,9 +395,13 @@ Research software / pre-release (v0.1). Scope is classified in
   suitability, separability/spillover diagnostics, the QC-first report, and an
   honest basic benchmark (bulk and spatial kept separate).
 - **Experimental (behind explicit flags; not default; labelled experimental):**
-  state-aware three-level hierarchy (`--state-aware`), granular signatures,
-  spatial multi-metric ranking, external-tool benchmark runners, the composite
-  scorecard, and the synthetic state-aware benchmark.
+  state-aware three-level hierarchy (`--state-aware`), the spatial weak-smoothing
+  preset (`--spatial-preset weak_smoothing`; reduces oversmoothing and improves
+  broad/fine correlation in synthetic breast + lung benchmarks but does not
+  consistently improve rare-niche/effective-N behaviour across tissues, so the
+  default smoothing parameter is unchanged), granular signatures, spatial
+  multi-metric ranking, external-tool benchmark runners, the composite scorecard,
+  and the synthetic state-aware benchmark.
 - **Deferred / not implemented (do not assume available):** reference
   adaptation, cell-type-specific expression reconstruction, hyperparameter
   tuning, and a full BayesPrism-like Bayesian model.

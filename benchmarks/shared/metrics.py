@@ -16,6 +16,12 @@ __all__ = [
     "family_of_column", "aggregate_to_families", "family_level_metrics",
     "unresolved_columns", "unresolved_aware_metrics", "fine_metrics_resolvable_only",
     "hierarchical_fair_metrics",
+    # compositional distances (PART 5/6/10/12)
+    "jensen_shannon_divergence", "total_variation_distance",
+    "aitchison_distance", "concordance_correlation_coefficient",
+    "compositional_metrics",
+    # composition-complexity panel (PART 1/10/17)
+    "effective_n_populations", "gini_coefficient", "composition_complexity",
 ]
 
 
@@ -238,3 +244,172 @@ def hierarchical_fair_metrics(true_fine: pd.DataFrame, est: pd.DataFrame,
         "fine_resolvable_rmse": fine_res["rmse"],
         **unaware,
     }
+
+
+# ===========================================================================
+# Compositional distances (PART 5/6/10/12)
+#
+# Proportions are compositions (non-negative, sum to ~1).  Plain RMSE/Pearson
+# ignore the simplex geometry; these add the standard compositional distances
+# used in deconvolution benchmarks.  All operate per-observation (per row) and
+# are robust to the zeros that pervade sparse deconvolution output.
+# ===========================================================================
+
+
+def _normalize(p: np.ndarray) -> np.ndarray:
+    p = np.asarray(p, float)
+    p = np.where(np.isfinite(p) & (p > 0), p, 0.0)
+    s = p.sum()
+    return p / s if s > 0 else p
+
+
+def jensen_shannon_divergence(p, q, *, base: float = 2.0) -> float:
+    """JSD between two proportion vectors. Bounded [0, 1] for base 2.
+
+    Defined for distributions with zeros: terms with ``p_i == 0`` contribute 0,
+    and the mixture ``m = (p+q)/2`` is positive wherever either input is, so no
+    ``log(0)`` arises.  Returns 0 for identical inputs, 1 for disjoint support.
+    """
+    p, q = _normalize(p), _normalize(q)
+    if p.sum() <= 0 or q.sum() <= 0:
+        return float("nan")
+    m = 0.5 * (p + q)
+
+    def _kl(a, b):
+        mask = a > 0
+        return float(np.sum(a[mask] * (np.log(a[mask] / b[mask]) / np.log(base))))
+
+    return float(0.5 * _kl(p, m) + 0.5 * _kl(q, m))
+
+
+def total_variation_distance(p, q) -> float:
+    """Total-variation distance ``0.5 * sum|p - q|``. Bounded [0, 1]."""
+    p, q = _normalize(p), _normalize(q)
+    if p.sum() <= 0 or q.sum() <= 0:
+        return float("nan")
+    return float(0.5 * np.sum(np.abs(p - q)))
+
+
+def aitchison_distance(p, q, *, pseudocount: float = 1e-6) -> float:
+    """Aitchison distance: Euclidean distance between clr-transformed comps.
+
+    Zeros are handled by **multiplicative replacement** — a small *pseudocount*
+    is added before re-normalising and taking the centred-log-ratio — the
+    standard compositional-data treatment (Aitchison; Martín-Fernández et al.).
+    The *pseudocount* used is reported via the function default so the zero
+    replacement is never silent.
+    """
+    p = _normalize(p) + pseudocount
+    q = _normalize(q) + pseudocount
+    if not (np.all(p > 0) and np.all(q > 0)):
+        return float("nan")
+    clr_p = np.log(p) - np.mean(np.log(p))
+    clr_q = np.log(q) - np.mean(np.log(q))
+    return float(np.sqrt(np.sum((clr_p - clr_q) ** 2)))
+
+
+def concordance_correlation_coefficient(true, est) -> float:
+    """Lin's concordance correlation coefficient (agreement, not just corr).
+
+    ``2 * cov(t, e) / (var_t + var_e + (mean_t - mean_e)^2)``.  Penalises both
+    scale and location shifts that Pearson ignores; 1.0 is perfect agreement.
+    Computed on the flattened vectors.
+    """
+    t = np.asarray(true, float).ravel()
+    e = np.asarray(est, float).ravel()
+    if t.size < 2 or t.std() < 1e-12 or e.std() < 1e-12:
+        return float("nan")
+    cov = float(np.mean((t - t.mean()) * (e - e.mean())))
+    denom = t.var() + e.var() + (t.mean() - e.mean()) ** 2
+    return float(2.0 * cov / denom) if denom > 0 else float("nan")
+
+
+def compositional_metrics(true_df: pd.DataFrame, est_df: pd.DataFrame) -> dict:
+    """Per-observation JSD / TV / Aitchison (mean over rows) + flattened CCC.
+
+    Complements :func:`accuracy_metrics` with simplex-aware distances.  JSD/TV/
+    Aitchison are averaged across observations; CCC is computed on the flattened
+    matrix to match ``accuracy_metrics``' Pearson.
+    """
+    t, e = align(true_df, est_df)
+    jsd, tv, ait = [], [], []
+    for i in range(t.shape[0]):
+        tr = t.iloc[i].to_numpy(float)
+        es = e.iloc[i].to_numpy(float)
+        jsd.append(jensen_shannon_divergence(tr, es))
+        tv.append(total_variation_distance(tr, es))
+        ait.append(aitchison_distance(tr, es))
+    return {
+        "jsd_mean": float(np.nanmean(jsd)),
+        "tv_mean": float(np.nanmean(tv)),
+        "aitchison_mean": float(np.nanmean(ait)),
+        "ccc": concordance_correlation_coefficient(
+            t.to_numpy(float).ravel(), e.to_numpy(float).ravel()),
+        "n_obs": int(t.shape[0]),
+        "n_cell_types": int(t.shape[1]),
+    }
+
+
+# ===========================================================================
+# Composition-complexity panel (PART 1 / 10 / 17)
+#
+# How concentrated is a predicted composition?  Used both to diagnose the bulk
+# sparsity question and to score "composition-complexity preservation" against
+# ground truth (a method should neither collapse nor over-disperse mass).
+# ===========================================================================
+
+_COMPLEXITY_THRESHOLDS = (0.0, 1e-4, 1e-3, 5e-3, 1e-2)
+
+
+def effective_n_populations(p) -> float:
+    """``exp(Shannon entropy)`` — the effective number of populations.
+
+    Equals the count when mass is uniform, 1 when one population holds all mass.
+    """
+    p = _normalize(p)
+    p = p[p > 0]
+    if p.size == 0:
+        return float("nan")
+    h = -np.sum(p * np.log(p))
+    return float(np.exp(h))
+
+
+def gini_coefficient(x) -> float:
+    """Gini coefficient of a non-negative composition (0 = equal, →1 = concentrated)."""
+    x = np.sort(np.asarray(x, float))
+    n = x.size
+    s = x.sum()
+    if n == 0 or s <= 0:
+        return float("nan")
+    idx = np.arange(1, n + 1)
+    return float(np.sum((2 * idx - n - 1) * x) / (n * s))
+
+
+def composition_complexity(df: pd.DataFrame,
+                           thresholds=_COMPLEXITY_THRESHOLDS) -> pd.DataFrame:
+    """Per-observation composition-complexity panel.
+
+    Columns: ``n_gt_<t>`` for each threshold, ``effective_n_populations``,
+    ``shannon_entropy_nats``, ``gini``, ``dominant_fraction``,
+    ``top{1,3,5}_cumulative``.  Index matches *df*.
+    """
+    rows = []
+    n_total = df.shape[1]
+    for samp, vec in df.iterrows():
+        v = np.where(np.isfinite(vec.to_numpy(float)), vec.to_numpy(float), 0.0)
+        out = {"n_reference_populations": n_total}
+        for tcut in thresholds:
+            key = "n_gt_0" if tcut == 0.0 else f"n_gt_{tcut:g}"
+            out[key] = int(np.sum(v > tcut))
+        p = _normalize(v)
+        nz = p[p > 0]
+        h = float(-np.sum(nz * np.log(nz))) if nz.size else float("nan")
+        out["shannon_entropy_nats"] = h
+        out["effective_n_populations"] = float(np.exp(h)) if np.isfinite(h) else float("nan")
+        out["gini"] = gini_coefficient(v)
+        out["dominant_fraction"] = float(p.max()) if p.sum() > 0 else float("nan")
+        srt = np.sort(p)[::-1]
+        for k in (1, 3, 5):
+            out[f"top{k}_cumulative"] = float(srt[:k].sum())
+        rows.append(out)
+    return pd.DataFrame(rows, index=df.index)

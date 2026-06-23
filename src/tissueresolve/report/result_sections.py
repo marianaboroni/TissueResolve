@@ -409,6 +409,16 @@ def _gating_mode_html(est: Any) -> str:
         "spillover and false-positive subtype detection</b>. It remains experimental "
         "and is <b>not applied</b> in this run; soft gating is the final hierarchical "
         "layer. See <code>docs/FINE_GRANULARITY_REFINER_REPORT.md</code>.</p>"
+        "<p><b>Estimate type.</b> Reported values are "
+        "<code>estimate_type = mRNA_proportion</code> (RNA-derived mRNA proportions). "
+        "They are <b>not absolute cell fractions</b>; conversion to cell fractions "
+        "requires explicit mRNA-content correction with appropriate per-type mRNA "
+        "content (only then are values reported as cell fractions).</p>"
+        "<p><i>Thresholds.</i> The resolution-decision and gating cut-offs "
+        "(separability, spillover, discriminating-gene, confidence, query-overlap, "
+        "and benchmark-reliability thresholds) are <b>heuristic defaults</b>, not "
+        "validated universal cut-offs, and are tunable per dataset. Their provenance "
+        "is documented in <code>docs/qc_thresholds.md</code>.</p>"
     )
 
 

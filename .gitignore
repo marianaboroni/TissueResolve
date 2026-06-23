@@ -37,8 +37,11 @@ benchmarks/outputs/
 benchmarks/external_tools/inputs/gold_truth_bulk/*/
 benchmarks/external_tools/inputs/bulk/
 benchmarks/external_tools/inputs/spatial/
-# External-tool R libraries and run/install logs (never commit)
+# External-tool environments + R libraries and run/install logs (never commit;
+# these are large local installs, not source).
 benchmarks/envs/Rlib/
+benchmarks/envs/r_lib/
+benchmarks/envs/c2l_py39/
 benchmarks/logs/
 *.h5ad
 *.h5

@@ -522,6 +522,12 @@ def test_partial_resolution_splits_confident_keeps_residual():
 
 
 def test_partial_resolution_mass_preserved_separable_family_no_unresolved():
+    # This asserts the LEGACY hard-gate property: a fully separable family is
+    # resolved with exactly zero residual (binary keep/drop).  Soft gating (the
+    # new default) scales by continuous confidence, so a separable family with
+    # confidence < 1 legitimately retains a small residual — that is by design.
+    # We therefore request the hard mode explicitly here (also exercising hard
+    # backward-compatibility).
     from tissueresolve.reference.hierarchy import assemble_hierarchical_estimates
     ref, mapping = _partial_ref()
     fam = pd.DataFrame({"FamX": [1.0], "FamP": [0.0]}, index=["s0"])
@@ -531,7 +537,7 @@ def test_partial_resolution_mass_preserved_separable_family_no_unresolved():
         warnings.simplefilter("ignore")
         est = assemble_hierarchical_estimates(
             fam, fine, ref, mapping, min_discriminating_genes=5,
-            allow_partial_resolution=True)
+            allow_partial_resolution=True, gating="hard")
     # FamX is fully separable → its unresolved residual is ~0
     fam_x_unresolved = est.combined_fine.get("unresolved_FamX")
     if fam_x_unresolved is not None:

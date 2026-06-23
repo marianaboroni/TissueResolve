@@ -75,7 +75,8 @@ def test_main_report_clean_and_benchmarks_separated():
     html = REPORT.read_text()
     assert "fig-body'></div>" not in html                  # no empty cards
     assert "All source-data tables" not in html            # full dump moved out
-    assert "9. Bulk benchmark" in html and "10. Spatial benchmark" in html
+    # QC-first 10-section layout: bulk benchmark = §7, spatial benchmark = §8
+    assert "7. Bulk benchmark" in html and "8. Spatial benchmark" in html
     i = html.find("id='spatial_benchmark'")
     seg = html[i:i + 4000].lower()
     assert "not accuracy" in seg or "no spot-level ground truth" in seg
@@ -86,5 +87,10 @@ def test_qc_before_predictions_in_main():
     import re
     html = REPORT.read_text()
     pos = {m.group(1): m.start() for m in re.finditer(r"id='([a-z_]+)'", html)}
-    for qc in ("reference", "signature", "input"):
+    # reference+signature (merged → 'reference'), input, and trusted resolution
+    # ('resolution') are all QC and must precede the prediction sections.
+    for qc in ("reference", "input", "resolution"):
         assert pos[qc] < pos["bulk"] and pos[qc] < pos["spatial"]
+    # predictions precede benchmarks
+    assert pos["bulk"] < pos["bulk_benchmark"]
+    assert pos["spatial"] < pos["spatial_benchmark"]
