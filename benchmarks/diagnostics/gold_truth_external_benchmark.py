@@ -83,6 +83,7 @@ EXTERNAL_TOOL_SCRIPTS = {
 }
 
 OUTPUT_ROOT = REPO / "benchmarks" / "outputs" / "gold_truth_external"
+DEFAULT_OUTPUT_ROOT = REPO / "benchmarks" / "outputs" / "gold_truth_external"
 INPUT_ROOT = REPO / "benchmarks" / "external_tools" / "inputs" / "gold_truth_bulk"
 RUN_MANIFEST_PATH = REPO / "benchmarks" / "external_tools" / "run_manifest.tsv"
 # Curated catalog (human-maintained); intentionally NOT written by this script.
@@ -425,7 +426,16 @@ def run_nnls_control(ctx: DatasetContext, bundle: MixtureBundle) -> tuple[pd.Dat
 
 def _write_status_manifest(rows: list[dict[str, Any]]) -> None:
     df = pd.DataFrame(rows)
-    _write_tsv(df, RUN_MANIFEST_PATH, index=False)
+    # Public manifest schema uses a `tool` column (see tests/test_benchmark_outputs.py);
+    # keep the richer `tool_name`/status fields alongside it.
+    if "tool_name" in df.columns and "tool" not in df.columns:
+        df.insert(0, "tool", df["tool_name"])
+    # Always write a per-run copy under the run's output dir.
+    _write_tsv(df, OUTPUT_ROOT / "run_manifest.tsv", index=False)
+    # Only a full run (default output dir) refreshes the canonical versioned
+    # manifest; subset/scratch runs must not clobber it.
+    if OUTPUT_ROOT == DEFAULT_OUTPUT_ROOT:
+        _write_tsv(df, RUN_MANIFEST_PATH, index=False)
 
 
 def _write_tool_registry(rows: list[dict[str, Any]]) -> None:

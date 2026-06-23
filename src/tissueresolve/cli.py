@@ -56,6 +56,14 @@ def cli() -> None:
                    "Use when the reference has only fine labels.")
 @click.option("--allow-unresolved/--no-allow-unresolved", default=True,
               help="Keep non-separable families at the broad level as unresolved mass.")
+@click.option("--hierarchical-gating",
+              type=click.Choice(["soft", "hard", "ungated"]),
+              default="soft", show_default=True,
+              help="Hierarchical within-family gating (hierarchical mode only). "
+                   "soft = DEFAULT, partial confidence-weighted unresolved mass "
+                   "(validated on breast + lung). hard = LEGACY binary threshold "
+                   "gate (over-abstains in collinear families). ungated = "
+                   "DIAGNOSTIC only (no abstention).")
 @click.option("--state-aware", is_flag=True, default=False,
               help="EXPERIMENTAL: state-aware broad→cell-type→state hierarchical "
                    "deconvolution (requires --resolution-mode hierarchical). It is "
@@ -76,7 +84,8 @@ def cli() -> None:
                    "a cross-modality overwrite is refused.")
 def run_cli(reference: str, query: str, out: str, mode: str, resolution_mode: str,
             broad_cell_type_col: str, fine_cell_type_col: str,
-            hierarchy_path: str | None, allow_unresolved: bool, state_aware: bool,
+            hierarchy_path: str | None, allow_unresolved: bool,
+            hierarchical_gating: str, state_aware: bool,
             solver: str, preset: str, dry_run: bool, force: bool) -> None:
     """User-friendly top-level run: auto-detect inputs, write analysis plan, optionally run pipelines."""
     rc = _run_top_level(
@@ -85,6 +94,7 @@ def run_cli(reference: str, query: str, out: str, mode: str, resolution_mode: st
         fine_cell_type_col=fine_cell_type_col,
         hierarchy_path=hierarchy_path,
         allow_unresolved=allow_unresolved,
+        hierarchical_gating=hierarchical_gating,
         state_aware=state_aware,
         solver=solver,
         dry_run=dry_run,
@@ -151,6 +161,7 @@ def _run_top_level(
     fine_cell_type_col: str = "auto",
     hierarchy_path: str | None = None,
     allow_unresolved: bool = True,
+    hierarchical_gating: str = "soft",
     state_aware: bool = False,
     solver: str = "auto",
     dry_run: bool = False,
@@ -227,6 +238,7 @@ def _run_top_level(
             "fine_cell_type_col": fine_cell_type_col,
             "cell_type_hierarchy": hierarchy_path,
             "allow_unresolved": allow_unresolved,
+            "hierarchical_gating": hierarchical_gating,
             "state_aware": state_aware_effective,
         }
     (outp / "analysis_plan.json").write_text(json.dumps(plan, indent=2))
@@ -251,6 +263,7 @@ def _run_top_level(
         cfg.hierarchical.broad_cell_type_col = broad_cell_type_col
         cfg.hierarchical.fine_cell_type_col = fine_cell_type_col
         cfg.hierarchical.allow_unresolved = allow_unresolved
+        cfg.hierarchical.hierarchical_gating = hierarchical_gating
     if resolved_mode == "bulk":
         result = _execute_bulk(
             reference, query, outp, cfg, resolution_mode=resolution_mode,
@@ -524,7 +537,27 @@ def _execute_bulk(reference: str, query: str, outp: Path, cfg, resolution_mode: 
     if resolution_mode == "hierarchical":
         from tissueresolve.bulk.hierarchical import save_hierarchical_bulk_outputs
         save_hierarchical_bulk_outputs(result, outp / "hierarchical")
+    result._figures = _generate_run_figures(result, outp, "bulk")
     return result
+
+
+def _generate_run_figures(result, outp: Path, modality: str,
+                          array_row=None, array_col=None) -> list:
+    """Render the standard interpretive figures for a run into ``<out>/figures``.
+
+    Best-effort: if the optional plotting stack is unavailable, a clear note is
+    printed and the run still succeeds (report falls back to tables)."""
+    try:
+        from tissueresolve.api import plot_results
+        figs = plot_results(result, outp / "figures",
+                            array_row=array_row, array_col=array_col)
+        click.echo(f"  wrote {len(figs)} figure(s) to {outp / 'figures'}/")
+        return figs
+    except Exception as exc:  # noqa: BLE001
+        click.echo(f"  note: figures not generated ({exc}); report will use "
+                   "tables only. Install the [report]/[spatial] extras for figures.",
+                   err=True)
+        return []
 
 
 def _execute_spatial(reference: str, query: str, outp: Path, cfg, resolution_mode: str,
@@ -572,6 +605,8 @@ def _execute_spatial(reference: str, query: str, outp: Path, cfg, resolution_mod
     if resolution_mode == "hierarchical":
         from tissueresolve.spatial.hierarchical import save_hierarchical_spatial_outputs
         save_hierarchical_spatial_outputs(result, outp / "hierarchical")
+    result._figures = _generate_run_figures(result, outp, "spatial",
+                                            array_row=array_row, array_col=array_col)
     return result
 
 
@@ -633,10 +668,12 @@ def _write_run_report_bundle(result, outp: Path, modality: str) -> None:
     except Exception as exc:  # noqa: BLE001
         click.echo(f"  warning: could not write warnings.json: {exc}", err=True)
 
-    # report.html (from the in-memory result → populated predictions + QC)
+    # report.html (from the in-memory result → populated predictions + QC +
+    # the interpretive figures generated during the run).
     try:
         from tissueresolve.report import generate_report
-        generate_report(modality, result, out=outp / "report.html")
+        figs = getattr(result, "_figures", None) or None
+        generate_report(modality, result, out=outp / "report.html", figures=figs)
     except Exception as exc:  # noqa: BLE001
         click.echo(f"  warning: could not generate report.html: {exc}", err=True)
 
@@ -669,6 +706,8 @@ def run(argv: list | None = None) -> int:
                         action="store_true", default=True)
     parser.add_argument("--no-allow-unresolved", dest="allow_unresolved",
                         action="store_false")
+    parser.add_argument("--hierarchical-gating", dest="hierarchical_gating",
+                        choices=("soft", "hard", "ungated"), default="soft")
     parser.add_argument("--solver",
                         choices=("auto", "nnls", "weighted_nnls", "marker_nnls",
                                  "ridge_nnls", "ensemble_nnls", "pipeline"),
@@ -689,6 +728,7 @@ def run(argv: list | None = None) -> int:
         fine_cell_type_col=args.fine_cell_type_col,
         hierarchy_path=args.hierarchy_path,
         allow_unresolved=args.allow_unresolved,
+        hierarchical_gating=args.hierarchical_gating,
         solver=args.solver,
         dry_run=args.dry_run,
         force=args.force,
@@ -798,6 +838,12 @@ def spatial() -> None:
 )
 @click.option("--lambda-spatial", type=float, default=None,
               help="Override CAR spatial regularisation strength λ.")
+@click.option("--spatial-preset",
+              type=click.Choice(["default", "weak_smoothing", "no_smoothing"]),
+              default="default", show_default=True,
+              help="Experimental spatial smoothing preset. 'default' keeps λ=0.1; "
+                   "'weak_smoothing' (experimental) uses λ=0.02; 'no_smoothing' uses λ=0. "
+                   "An explicit --lambda-spatial overrides the preset.")
 @click.option("--max-iter", type=int, default=None,
               help="Override maximum solver iterations.")
 @click.option("--random-state", type=int, default=None,
@@ -818,6 +864,7 @@ def spatial_run(
     cell_type_col: str,
     marker_genes_path: str | None,
     lambda_spatial: float | None,
+    spatial_preset: str,
     max_iter: int | None,
     random_state: int | None,
     min_counts: int,
@@ -846,8 +893,20 @@ def spatial_run(
         TissueResolveConfig.from_yaml(config_path)
         if config_path else TissueResolveConfig()
     )
+    # Experimental spatial smoothing preset (default = no-op, λ stays 0.1).
+    from tissueresolve.experimental.spatial_presets import apply_spatial_preset
+    preset_info = apply_spatial_preset(cfg, spatial_preset)
+    if preset_info.experimental:
+        click.echo(f"[experimental] spatial preset '{spatial_preset}' "
+                   f"→ λ_spatial={cfg.spatial_solver.lambda_spatial}")
     if lambda_spatial is not None:
+        # explicit override wins over the preset; re-derive provenance.
         cfg.spatial_solver.lambda_spatial = lambda_spatial
+        preset_info = apply_spatial_preset(cfg, "default")
+        preset_info.preset = f"manual_lambda({lambda_spatial})"
+        preset_info.lambda_spatial = float(lambda_spatial)
+        preset_info.smoothing_used = lambda_spatial > 0.0
+        preset_info.is_default = False
     if max_iter is not None:
         cfg.spatial_solver.max_iter = max_iter
     if random_state is not None:
@@ -898,10 +957,14 @@ def spatial_run(
     # --- save ---
     result.deconv.save(out / "deconv")
     result.qc.save(out / "qc")
+    _generate_run_figures(result, out, "spatial",
+                          array_row=array_row, array_col=array_col)
 
     import json
+    run_md = dict(result.run_metadata)
+    run_md.update(preset_info.to_metadata())
     with (out / "run_metadata.json").open("w", encoding="utf-8") as fh:
-        json.dump(result.run_metadata, fh, indent=2, default=str)
+        json.dump(run_md, fh, indent=2, default=str)
 
     m = result.deconv
     click.echo(
