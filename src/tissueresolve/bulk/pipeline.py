@@ -214,10 +214,24 @@ class BulkPipeline:
                 bulk_full=bulk.reindex(gene_panel).fillna(0.0),
             )
 
-        # 6. NNLS solve
-        from tissueresolve.bulk.solver import WNNLSSolver
-        solver = WNNLSSolver(seed=self.cfg.bulk_solver.seed)
-        deconv = solver.solve(bulk, ref, gene_panel, gene_weights)
+        # 6. Solve. Default = weighted NNLS (unchanged). Experimental, opt-in:
+        # count-likelihood (Poisson/NB) GLM solver selected via cfg.bulk_solver.method.
+        method = getattr(self.cfg.bulk_solver, "method", "wNNLS")
+        if method in ("poisson_glm_experimental", "nb_glm_experimental"):
+            from tissueresolve.experimental.nb_bulk_solver import NBGLMBulkSolver
+            loss = "poisson" if method == "poisson_glm_experimental" else "nb"
+            solver = NBGLMBulkSolver(loss=loss, seed=self.cfg.bulk_solver.seed,
+                                     max_iter=self.cfg.bulk_solver.max_iter,
+                                     tol=self.cfg.bulk_solver.tol)
+            deconv = solver.solve(bulk, ref, gene_panel, gene_weights)
+        elif method == "wNNLS":
+            from tissueresolve.bulk.solver import WNNLSSolver
+            solver = WNNLSSolver(seed=self.cfg.bulk_solver.seed)
+            deconv = solver.solve(bulk, ref, gene_panel, gene_weights)
+        else:
+            raise ValueError(
+                f"Unknown bulk_solver.method {method!r}. Use 'wNNLS' (default), "
+                "'poisson_glm_experimental', or 'nb_glm_experimental'.")
 
         # Update metadata
         deconv.run_metadata.update({
@@ -238,6 +252,11 @@ class BulkPipeline:
             bootstrapper = BulkBootstrapCI(config=boot_cfg)
             bootstrapper.attach(deconv, bulk, ref)
             deconv.run_metadata.update(bootstrapper.ci_metadata)
+            # Bootstrap resampling uses wNNLS regardless of the point solver; record
+            # this so GLM-point + bootstrap-CI provenance is never silently mislabelled.
+            if method != "wNNLS":
+                deconv.run_metadata["bootstrap_solver"] = "wNNLS"
+                deconv.run_metadata["point_solver"] = method
 
         # 8. mRNA content correction
         if mrna_corrector is not None:

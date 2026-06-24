@@ -76,6 +76,12 @@ def cli() -> None:
               default="auto", show_default=True,
               help="Bulk solver backbone. 'auto' picks the best by gene-masking CV; "
                    "'pipeline' uses the protocol-aware weighted pipeline.")
+@click.option("--bulk-solver",
+              type=click.Choice(["wNNLS", "poisson_glm_experimental", "nb_glm_experimental"]),
+              default="wNNLS", show_default=True,
+              help="Bulk likelihood model. 'wNNLS' (DEFAULT) = weighted NNLS, unchanged. "
+                   "'poisson_glm_experimental' / 'nb_glm_experimental' (experimental, "
+                   "opt-in) use a count-likelihood GLM. Outputs remain mRNA proportions.")
 @click.option("--preset", type=click.Choice(["quick", "standard", "publication", "diagnostic"]), default="standard")
 @click.option("--dry-run", is_flag=True, default=False)
 @click.option("--force", is_flag=True, default=False,
@@ -86,7 +92,7 @@ def run_cli(reference: str, query: str, out: str, mode: str, resolution_mode: st
             broad_cell_type_col: str, fine_cell_type_col: str,
             hierarchy_path: str | None, allow_unresolved: bool,
             hierarchical_gating: str, state_aware: bool,
-            solver: str, preset: str, dry_run: bool, force: bool) -> None:
+            solver: str, bulk_solver: str, preset: str, dry_run: bool, force: bool) -> None:
     """User-friendly top-level run: auto-detect inputs, write analysis plan, optionally run pipelines."""
     rc = _run_top_level(
         reference, query, out, mode, preset, resolution_mode,
@@ -97,6 +103,7 @@ def run_cli(reference: str, query: str, out: str, mode: str, resolution_mode: st
         hierarchical_gating=hierarchical_gating,
         state_aware=state_aware,
         solver=solver,
+        bulk_solver_method=bulk_solver,
         dry_run=dry_run,
         force=force,
     )
@@ -164,6 +171,7 @@ def _run_top_level(
     hierarchical_gating: str = "soft",
     state_aware: bool = False,
     solver: str = "auto",
+    bulk_solver_method: str = "wNNLS",
     dry_run: bool = False,
     force: bool = False,
 ) -> int:
@@ -259,6 +267,9 @@ def _run_top_level(
         return 0
 
     cfg = _configure_from_preset(preset_params)
+    # Experimental, opt-in bulk likelihood model (default 'wNNLS' = unchanged).
+    if bulk_solver_method and bulk_solver_method != "wNNLS":
+        cfg.bulk_solver.method = bulk_solver_method
     if resolution_mode == "hierarchical":
         cfg.hierarchical.broad_cell_type_col = broad_cell_type_col
         cfg.hierarchical.fine_cell_type_col = fine_cell_type_col
@@ -847,7 +858,11 @@ def spatial() -> None:
                                  "edge_aware_smoothing", "combined_weak_edge_smoothing",
                                  "state_regularized_experimental",
                                  "sparsity_state_regularized_experimental",
-                                 "adaptive_resolution_experimental"]),
+                                 "adaptive_resolution_experimental",
+                                 "state_regularized_solver_experimental",
+                                 "state_regularized_solver_competition",
+                                 "state_regularized_solver_laplacian",
+                                 "state_regularized_solver_weak"]),
               default="default", show_default=True,
               help="Experimental spatial smoothing preset. 'default' keeps λ=0.1; "
                    "'weak_smoothing' (experimental) uses λ=0.02; 'no_smoothing' uses λ=0; "

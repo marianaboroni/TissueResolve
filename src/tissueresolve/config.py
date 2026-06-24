@@ -37,6 +37,7 @@ __all__ = [
     "SpatialQCConfig",
     "HierarchicalConfig",
     "StateRegularizationConfig",
+    "StateRegularizedSolverConfig",
 ]
 
 
@@ -136,15 +137,27 @@ class DiscordanceConfig:
 
 @dataclass
 class BulkSolverConfig:
-    """Weighted NNLS solver settings for bulk deconvolution.
+    """Bulk deconvolution solver settings.
 
     Attributes
     ----------
     seed:
-        Random seed (passed to bootstrap; the solver itself is deterministic).
+        Random seed (passed to bootstrap; the wNNLS solver itself is deterministic).
+    method:
+        ``"wNNLS"`` (DEFAULT — weighted NNLS, unchanged), or the experimental,
+        opt-in count-likelihood solvers ``"poisson_glm_experimental"`` /
+        ``"nb_glm_experimental"`` (see ``experimental/nb_bulk_solver.py``). The
+        experimental solvers return the same ``BulkDeconvResult`` schema; outputs
+        remain RNA-derived (mRNA) proportions.
+    max_iter, tol:
+        Iteration budget / convergence tolerance for the experimental GLM solver
+        (ignored by wNNLS).
     """
 
     seed: int = 42
+    method: str = "wNNLS"
+    max_iter: int = 500
+    tol: float = 1e-6
 
 
 @dataclass
@@ -246,6 +259,55 @@ class StateRegularizationConfig:
     k_states: int = 5
     min_similarity: float = 0.0
     group_threshold: float = 0.9
+    experimental: bool = True
+
+
+@dataclass
+class StateRegularizedSolverConfig:
+    """Experimental **in-solver** state-similarity regularization (Option A; opt-in).
+
+    A SEPARATE experimental projected-gradient solver (the production NB-CAR solver
+    is NOT modified). When ``enabled`` is False (default) the spatial pipeline is
+    unchanged. When enabled, the production solver provides a warm start and this
+    optimiser then minimises the joint objective
+    ``recon + lambda_spatial·spatial + lambda_state·state + lambda_sparse·sparsity``.
+
+    Inspired by the *concept* of state-aware regularization; NOT Redeconve, not
+    Redeconve-equivalent, not the default solver. See
+    ``docs/IN_SOLVER_STATE_REGULARIZATION_REPORT.md``.
+
+    Attributes
+    ----------
+    enabled:
+        Master switch (``False`` → production behaviour, solver path skipped).
+    lambda_spatial, lambda_state, lambda_sparse:
+        Coefficients on the spot-smoothing, state-coupling, and negative-entropy
+        sparsity penalties in the joint objective.
+    state_penalty:
+        ``"competition"`` (default; discourages co-assigning similar states in a
+        spot) or ``"laplacian"`` (smooths similar-state abundances across spots).
+    within_family_only:
+        Restrict the state graph to same-family pairs (default).
+    preserve_broad_mass:
+        Conserve per-family mass from the warm start (default False).
+    max_iter, tol:
+        Projected-gradient budget and relative-loss convergence tolerance.
+    optimizer:
+        Only ``"projected_gradient"`` is implemented.
+    experimental:
+        Provenance flag (always True).
+    """
+
+    enabled: bool = False
+    lambda_spatial: float = 0.02
+    lambda_state: float = 0.01
+    lambda_sparse: float = 0.001
+    state_penalty: str = "competition"
+    within_family_only: bool = True
+    preserve_broad_mass: bool = False
+    max_iter: int = 500
+    tol: float = 1e-5
+    optimizer: str = "projected_gradient"
     experimental: bool = True
 
 
@@ -430,6 +492,8 @@ class TissueResolveConfig:
     hierarchical: HierarchicalConfig = field(default_factory=HierarchicalConfig)
     state_regularization: StateRegularizationConfig = field(
         default_factory=StateRegularizationConfig)
+    state_regularized_solver: StateRegularizedSolverConfig = field(
+        default_factory=StateRegularizedSolverConfig)
     output_dir: Path = field(default_factory=lambda: Path("tissueresolve_out"))
     verbose: bool = True
 
@@ -479,6 +543,7 @@ class TissueResolveConfig:
             "spatial_qc": SpatialQCConfig,
             "hierarchical": HierarchicalConfig,
             "state_regularization": StateRegularizationConfig,
+            "state_regularized_solver": StateRegularizedSolverConfig,
         }
         kwargs: dict[str, Any] = {}
         for key, sub_cls in sub_map.items():
