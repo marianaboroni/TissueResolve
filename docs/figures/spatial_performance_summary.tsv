@@ -1,0 +1,6 @@
+method	fine_pearson	broad_pearson	local_rmse	oversmoothing_score	domain_recovery_ari	runtime_seconds
+TissueResolve spatial (default/flat)	0.77	0.884	0.026	1.95	0.271	10.2
+CARD	0.674	0.859	0.033	0.59	0.253	34.6
+RCTD	0.538	0.971	0.041	0.87	0.313	2078.0
+cell2location	0.681	0.819	0.032	0.96	0.295	1561.0
+NNLS per-spot (control)	0.718	0.924	0.041	0.37	0.253	5.3

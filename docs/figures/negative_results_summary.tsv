@@ -1,0 +1,7 @@
+experiment	modality	outcome	finding	disposition
+NB overdispersion (vs Poisson)	bulk	no improvement	NB≈Poisson even with donor-level dispersion; gain is count-likelihood	use Poisson
+combined_weak_edge_smoothing	spatial	redundant	≈ weak_smoothing; edge term inert at low λ	not recommended
+post-fit state regularization	spatial/bulk	negative	did not improve conditional within-family RMSE	diagnostic only
+in-solver state regularization	spatial	negative	competition over-concentrates; laplacian over-smooths; worse than default	not recommended
+state-similarity / regularized solver	both	negative	cannot recover non-identifiable collinear fine states	diagnostic only
+rare detection on collinear subtype	bulk	bounded by identifiability	reg-T cell: AP<base rate; cannot reduce FPR without losing recall	layer flags it honestly

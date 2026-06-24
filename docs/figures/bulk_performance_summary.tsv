@@ -1,0 +1,13 @@
+dataset	method	fine_pearson	broad_pearson	conditional_rmse	rare_sensitivity	rare_precision	rare_fpr	false_positive_subtype_rate	absent_subtype_mass	effective_n_pred	effective_n_truth
+breast	TissueResolve Poisson GLM (rec. experimental)	0.814	0.98	0.156	0.864	0.587	0.554	0.026	0.022	16.079	16.179
+breast	TissueResolve NB GLM	0.814	0.98	0.156	0.864	0.587	0.554	0.026	0.022	16.079	16.179
+breast	TissueResolve wNNLS (default)	0.671	0.786	0.233	0.368	0.693	0.169	0.023	0.028	11.913	16.179
+breast	external NNLS (control)	0.796	0.964	0.219	0.593	0.567	0.409	0.027	0.03	13.358	16.179
+breast	MuSiC	0.669	0.854	0.176	0.923	0.542	0.619	0.022	0.022	17.321	16.179
+breast	BisqueRNA	0.389	0.61	0.28	0.282	0.733	0.073	0.015	0.033	9.407	16.179
+lung	TissueResolve Poisson GLM (rec. experimental)	0.758	0.957	0.198	0.6	1.0	0.0	0.025	0.055	19.102	16.596
+lung	TissueResolve NB GLM	0.76	0.957	0.196	0.7	1.0	0.0	0.024	0.055	19.05	16.596
+lung	TissueResolve wNNLS (default)	0.566	0.86	0.297	0.0		0.0	0.026	0.063	11.557	16.596
+lung	external NNLS (control)	0.611	0.919	0.297	0.4	0.067	0.208	0.028	0.066	13.049	16.596
+lung	MuSiC	0.619	0.851	0.237	0.933	0.204	0.315	0.037	0.061	22.893	16.596
+lung	BisqueRNA	0.378	0.657	0.3	0.6	0.058	0.306	0.033	0.068	15.174	16.596

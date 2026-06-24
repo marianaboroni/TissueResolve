@@ -144,6 +144,23 @@ tissueresolve run --reference reference.h5ad --query bulk_counts.tsv \
   --out results/bulk --mode bulk --preset standard
 ```
 
+**Recommended experimental bulk solver (Poisson GLM).** For bulk RNA-seq,
+TissueResolve includes an opt-in Poisson GLM solver that is recommended as the
+experimental count-likelihood solver based on donor-disjoint benchmark results
+(breast + lung). The **default solver remains `wNNLS` pending broader validation**.
+
+```bash
+tissueresolve run --reference reference.h5ad --query bulk_counts.tsv \
+  --out results/bulk --mode bulk --bulk-solver poisson_glm_experimental
+```
+
+It improved fine/broad correlation, conditional within-family RMSE, effective-N
+calibration, and rare recall (where identifiable) over `wNNLS`, at much lower runtime
+than slower probabilistic external tools. See
+[docs/POISSON_GLM_RECOMMENDED_SOLVER.md](docs/POISSON_GLM_RECOMMENDED_SOLVER.md) and the
+[bulk tutorial](docs/tutorials/bulk_poisson_glm_quickstart.md). NB GLM did not improve
+over Poisson (the gain is the count likelihood, not overdispersion).
+
 ### Spatial
 
 ```bash
@@ -379,6 +396,15 @@ See the documentation pages in `docs/`:
 - `docs/batch_effects.md`
 - `docs/library_type_references.md`
 
+Alpha / publication-facing docs:
+
+- [docs/PERFORMANCE_BENCHMARK_REPORT.md](docs/PERFORMANCE_BENCHMARK_REPORT.md) — bulk + spatial performance vs external tools
+- [docs/POISSON_GLM_RECOMMENDED_SOLVER.md](docs/POISSON_GLM_RECOMMENDED_SOLVER.md)
+- [docs/tutorials/bulk_poisson_glm_quickstart.md](docs/tutorials/bulk_poisson_glm_quickstart.md)
+- [docs/tutorials/adaptive_resolution_and_reference_uncertainty.md](docs/tutorials/adaptive_resolution_and_reference_uncertainty.md)
+- [docs/tutorials/spatial_deconvolution_quickstart.md](docs/tutorials/spatial_deconvolution_quickstart.md)
+- [docs/ALPHA_RELEASE_NOTES.md](docs/ALPHA_RELEASE_NOTES.md) · [docs/FUTURE_WORK_DISTRIBUTION_AWARE_REFERENCE.md](docs/FUTURE_WORK_DISTRIBUTION_AWARE_REFERENCE.md)
+
 ## Status
 
 **TissueResolve is currently alpha / early-access research software. It is not
@@ -402,9 +428,28 @@ Research software / pre-release (v0.1). Scope is classified in
   default smoothing parameter is unchanged), granular signatures, spatial
   multi-metric ranking, external-tool benchmark runners, the composite scorecard,
   and the synthetic state-aware benchmark.
+- **Recommended experimental:** the **Poisson GLM bulk solver**
+  (`--bulk-solver poisson_glm_experimental`) — the strongest validated algorithmic
+  improvement to date (default stays `wNNLS`); adaptive-resolution and
+  reference-uncertainty diagnostics (reporting only).
+- **Benchmark-only / NOT recommended (kept for reproducibility, do not use as standard
+  modes):** `combined_weak_edge_smoothing` and the state-regularization /
+  `state_regularized_solver_*` variants — all **negative results** for improving
+  conditional within-family recovery.
 - **Deferred / not implemented (do not assume available):** reference
   adaptation, cell-type-specific expression reconstruction, hyperparameter
-  tuning, and a full BayesPrism-like Bayesian model.
+  tuning, a full BayesPrism-like Bayesian model, and the external bulk tools
+  BayesPrism/DWLS/SCDC (attempted, failed to install in this environment).
+
+**Benchmark summary** (donor-disjoint gold truth; full numbers in
+[docs/PERFORMANCE_BENCHMARK_REPORT.md](docs/PERFORMANCE_BENCHMARK_REPORT.md)):
+the opt-in Poisson GLM leads on bulk fine/broad accuracy, conditional within-family
+RMSE, and effective-N on breast + lung, beating `wNNLS`, external NNLS, MuSiC, and
+BisqueRNA at 20–40× lower runtime. Spatially, the default solver has the best local
+RMSE but oversmooths more than CARD; smoothing presets reduce but do not close that
+gap. **Negative results are reported, not hidden** — regularization cannot recover
+non-identifiable collinear fine states, and TissueResolve declines to promise fine
+resolution the reference cannot support (it reports grouped/broad/unresolved instead).
 
 > **Experimental: state-aware deconvolution runs behind `--state-aware`. It is
 > not part of the default v0.1 workflow and has not been validated across real
