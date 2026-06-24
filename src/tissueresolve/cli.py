@@ -843,11 +843,15 @@ def spatial() -> None:
 @click.option("--lambda-spatial", type=float, default=None,
               help="Override CAR spatial regularisation strength λ.")
 @click.option("--spatial-preset",
-              type=click.Choice(["default", "weak_smoothing", "no_smoothing"]),
+              type=click.Choice(["default", "weak_smoothing", "no_smoothing",
+                                 "edge_aware_smoothing", "combined_weak_edge_smoothing"]),
               default="default", show_default=True,
               help="Experimental spatial smoothing preset. 'default' keeps λ=0.1; "
-                   "'weak_smoothing' (experimental) uses λ=0.02; 'no_smoothing' uses λ=0. "
-                   "An explicit --lambda-spatial overrides the preset.")
+                   "'weak_smoothing' (experimental) uses λ=0.02; 'no_smoothing' uses λ=0; "
+                   "'edge_aware_smoothing' (experimental) uses an in-solver edge-weighted "
+                   "graph (λ=0.05); 'combined_weak_edge_smoothing' (experimental) combines "
+                   "λ=0.02 with the edge-weighted graph. An explicit --lambda-spatial "
+                   "overrides the preset λ.")
 @click.option("--max-iter", type=int, default=None,
               help="Override maximum solver iterations.")
 @click.option("--random-state", type=int, default=None,
