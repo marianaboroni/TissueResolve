@@ -40,6 +40,27 @@ SPATIAL_PRESETS: dict[str, dict] = {
                                      "combined": True,
                                      "description": "experimental: combined weak (low lambda) + "
                                                     "in-solver edge-aware smoothing"},
+    # Experimental state-similarity / Redeconve-inspired presets (opt-in). These
+    # leave lambda_spatial at the package default and instead enable the post-fit,
+    # within-family, mass-conserving state refinement (no solver change). They are
+    # no-ops unless a fine->broad family_map is supplied to deconv_spatial.
+    "state_regularized_experimental": {
+        "lambda_spatial": DEFAULT_LAMBDA_SPATIAL, "experimental": True,
+        "state_regularization": {"enabled": True, "mode": "state_regularized",
+                                 "lambda_state": 0.01, "lambda_sparse": 0.001},
+        "description": "experimental: within-family state-similarity concentration + "
+                       "sparsity refinement (post-fit; not Redeconve)"},
+    "sparsity_state_regularized_experimental": {
+        "lambda_spatial": DEFAULT_LAMBDA_SPATIAL, "experimental": True,
+        "state_regularization": {"enabled": True, "mode": "sparsity",
+                                 "lambda_state": 0.0, "lambda_sparse": 0.01},
+        "description": "experimental: within-family sparsity-aware refinement "
+                       "(reduce inflated effective-N; rare states protected)"},
+    "adaptive_resolution_experimental": {
+        "lambda_spatial": DEFAULT_LAMBDA_SPATIAL, "experimental": True,
+        "state_regularization": {"enabled": True, "mode": "adaptive_resolution"},
+        "description": "experimental: diagnostic state grouping / adaptive resolution "
+                       "(estimates unchanged; reporting only)"},
 }
 
 
@@ -54,6 +75,8 @@ class SpatialPresetInfo:
     edge_aware: bool = False
     combined: bool = False
     min_edge_weight: float | None = None
+    state_regularization: bool = False
+    state_regularization_mode: str | None = None
 
     def to_metadata(self) -> dict:
         return {
@@ -63,6 +86,8 @@ class SpatialPresetInfo:
             "edge_aware_smoothing_used": self.edge_aware,
             "combined_preset": self.combined,
             "min_edge_weight": self.min_edge_weight,
+            "state_regularization_used": self.state_regularization,
+            "state_regularization_mode": self.state_regularization_mode,
             "is_default_spatial_behaviour": self.is_default,
             "spatial_preset_experimental": self.experimental,
             "spatial_preset_description": self.description,
@@ -93,6 +118,15 @@ def apply_spatial_preset(cfg, preset: str) -> SpatialPresetInfo:
     min_ew = spec.get("min_edge_weight")
     if min_ew is not None and hasattr(cfg.spatial_solver, "edge_aware_min_weight"):
         cfg.spatial_solver.edge_aware_min_weight = float(min_ew)
+    # optional state-similarity regularization (experimental presets)
+    sr_spec = spec.get("state_regularization")
+    if sr_spec is not None and hasattr(cfg, "state_regularization"):
+        for key, val in sr_spec.items():
+            if hasattr(cfg.state_regularization, key):
+                setattr(cfg.state_regularization, key, val)
+    elif hasattr(cfg, "state_regularization"):
+        # presets without a state_regularization block must leave it disabled
+        cfg.state_regularization.enabled = False
     lam = float(cfg.spatial_solver.lambda_spatial)
     info = SpatialPresetInfo(
         preset=preset,
@@ -105,4 +139,6 @@ def apply_spatial_preset(cfg, preset: str) -> SpatialPresetInfo:
     info.edge_aware = bool(spec.get("edge_aware", False))
     info.combined = bool(spec.get("combined", False))
     info.min_edge_weight = float(min_ew) if min_ew is not None else None
+    info.state_regularization = bool(sr_spec is not None and sr_spec.get("enabled", False))
+    info.state_regularization_mode = sr_spec.get("mode") if sr_spec is not None else None
     return info

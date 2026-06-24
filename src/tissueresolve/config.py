@@ -36,6 +36,7 @@ __all__ = [
     "BulkQCConfig",
     "SpatialQCConfig",
     "HierarchicalConfig",
+    "StateRegularizationConfig",
 ]
 
 
@@ -179,6 +180,73 @@ class SpatialSolverConfig:
     update_mismatch_every: int = 5
     n_jobs: int = 1
     random_state: int = 42
+    # Experimental in-solver edge-aware smoothing (opt-in; default off = unchanged
+    # behaviour). When True the pipeline builds an edge-weighted spot graph so the
+    # CAR penalty smooths less across likely tissue boundaries.
+    edge_aware: bool = False
+    edge_aware_k_neighbors: int = 6
+    edge_aware_expression_weight: float = 1.0
+    edge_aware_composition_weight: float = 0.0
+    edge_aware_min_weight: float = 0.05
+    edge_aware_max_weight: float = 1.0
+
+
+@dataclass
+class StateRegularizationConfig:
+    """Experimental state-similarity / Redeconve-*inspired* regularization.
+
+    Opt-in, non-default, feature-flagged ``experimental``. When ``enabled`` is
+    False (the default) the spatial pipeline behaves exactly as before. When
+    enabled, a **post-fit, within-family, mass-conserving** refinement of the
+    fitted spot×state proportions is applied (no solver change): similar fine
+    states are concentrated (redundancy sharpening) and small within-family mass
+    is shrunk (sparsity), conserving each spot's broad-family mass and leaving
+    ``unresolved_<family>`` columns untouched.
+
+    Inspired by the *concept* of state-aware regularization; NOT a copy of
+    Redeconve and no equivalence is claimed. See
+    ``docs/STATE_SIMILARITY_REGULARIZATION_REPORT.md``.
+
+    Attributes
+    ----------
+    enabled:
+        Master switch. ``False`` → default behaviour, refinement skipped.
+    mode:
+        ``"state_regularized"`` (graph concentration + sparsity),
+        ``"sparsity"`` (sparsity only), or ``"adaptive_resolution"`` (diagnostic
+        grouping only; estimates unchanged).
+    lambda_state:
+        Strength of within-family redundancy concentration (0 disables it).
+    lambda_sparse:
+        Strength of within-family sparsity shrinkage (0 disables it).
+    within_family_only:
+        Restrict the state graph + refinement to same-family states (default;
+        avoids coupling unrelated families).
+    preserve_broad_mass:
+        Conserve each spot's broad-family mass during refinement (default True).
+    similarity_method:
+        ``"correlation"`` (default) or ``"cosine"`` for the state graph.
+    k_states:
+        Max similar neighbours per state in the graph.
+    min_similarity:
+        Drop state-graph edges with similarity at or below this value.
+    group_threshold:
+        Similarity at/above which ``adaptive_resolution`` recommends grouping.
+    experimental:
+        Provenance flag (always True for this module).
+    """
+
+    enabled: bool = False
+    mode: str = "state_regularized"
+    lambda_state: float = 0.01
+    lambda_sparse: float = 0.001
+    within_family_only: bool = True
+    preserve_broad_mass: bool = True
+    similarity_method: str = "correlation"
+    k_states: int = 5
+    min_similarity: float = 0.0
+    group_threshold: float = 0.9
+    experimental: bool = True
 
 
 @dataclass
@@ -360,6 +428,8 @@ class TissueResolveConfig:
     bulk_qc: BulkQCConfig = field(default_factory=BulkQCConfig)
     spatial_qc: SpatialQCConfig = field(default_factory=SpatialQCConfig)
     hierarchical: HierarchicalConfig = field(default_factory=HierarchicalConfig)
+    state_regularization: StateRegularizationConfig = field(
+        default_factory=StateRegularizationConfig)
     output_dir: Path = field(default_factory=lambda: Path("tissueresolve_out"))
     verbose: bool = True
 
@@ -408,6 +478,7 @@ class TissueResolveConfig:
             "bulk_qc": BulkQCConfig,
             "spatial_qc": SpatialQCConfig,
             "hierarchical": HierarchicalConfig,
+            "state_regularization": StateRegularizationConfig,
         }
         kwargs: dict[str, Any] = {}
         for key, sub_cls in sub_map.items():
