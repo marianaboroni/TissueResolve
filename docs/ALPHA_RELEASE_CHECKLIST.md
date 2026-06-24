@@ -12,7 +12,8 @@ commits are made.
 | Figures/tables | ✅ | `docs/figures/*.tsv` (+ `*.png` where plotting available) |
 | Outputs gitignored | ✅ | `benchmarks/outputs/**`, `*.h5ad`/`*.h5`/`*.RDS`, `r_lib`, `c2l_*`, logs — verified |
 | No large files staged | ✅ | only small `docs/figures/*` (≤39 KB) are public artifacts |
-| Package builds | ⚠️ verify | run `python -m build` if build tooling present (see Phase 8 result in final response) |
+| Package builds | ✅ | builds a valid wheel via `pip wheel . --no-deps` (PEP517 backend OK, `tissueresolve-0.1.0-py3-none-any.whl`). Note: the `python -m build` *frontend* is not installed in this env (a different `build` package shadows it); install `python-build` to use it. `dist/` is gitignored. |
+| Public-doc overclaim audit | ✅ | scanned for best/SOTA/superior/cell-fractions/default-Poisson/NB-superior; bare "best" tightened to qualified wording; only disclaimer lines retain the terms |
 | CLI help reviewed | ✅ | `--bulk-solver` + `--spatial-preset` documented; experimental flags labelled |
 | Default behaviour unchanged | ✅ | bulk default `wNNLS`; spatial default λ=0.1; no defaults changed |
 | Recommended experimental features labelled | ✅ | Poisson GLM = recommended experimental; smoothing/state presets = experimental/benchmark-only |

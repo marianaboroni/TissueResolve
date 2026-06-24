@@ -39,7 +39,8 @@ Both are **experimental**; the default keeps `lambda_spatial = 0.1`. An explicit
 
 On synthetic gold truth (see `docs/PERFORMANCE_BENCHMARK_REPORT.md` §7):
 
-- TissueResolve's default spatial solver has the **best local RMSE** and competitive
+- TissueResolve's default spatial solver has the **lowest local RMSE among the
+  compared methods** and competitive
   fine accuracy, but **oversmooths more than CARD** (oversmoothing ≈1.95 vs CARD ≈0.59;
   1.0 = truth-like). This is the main spatial weakness.
 - `weak_smoothing` reduces oversmoothing (e.g. breast 1.80→1.31) but does **not** reach

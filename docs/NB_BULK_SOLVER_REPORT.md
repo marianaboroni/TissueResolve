@@ -192,7 +192,7 @@ CARD excluded (spatial). Mean over 5 scenarios:
 
 **The Poisson/NB GLM leads on fine & broad accuracy, conditional within-family RMSE,
 and effective-N calibration** (essentially exact, 16.1 vs 16.2). MuSiC is the closest
-competitor (best rare recall, but the **same high rare-FPR / lower-precision
+competitor (highest rare recall, but the **same high rare-FPR / lower-precision
 tradeoff** as the GLM); Bisque is conservative (high rare precision, low recall,
 weak accuracy).
 

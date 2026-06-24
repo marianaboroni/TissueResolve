@@ -103,9 +103,10 @@ oversmoothing (breast 1.80→1.31, lung 1.85→1.52) but does **not** reach CARD
 `edge_aware_smoothing` improves boundary F1 but fails the strict ≥20% oversmoothing
 gate; `combined_weak_edge_smoothing` is redundant with `weak_smoothing`.
 
-**Interpretation.** TissueResolve's default spatial solver has the **best local RMSE**
-and competitive fine accuracy, but **oversmooths the most** (1.95 vs CARD 0.59) — the
-clearest spatial weakness. (Figure: `spatial_oversmoothing_vs_accuracy.png`.)
+**Interpretation.** On this synthetic scenario TissueResolve's default spatial solver
+has the **lowest local RMSE among the compared methods** and competitive fine accuracy,
+but **oversmooths the most** (1.95 vs CARD 0.59) — the clearest spatial weakness.
+(Figure: `spatial_oversmoothing_vs_accuracy.png`.)
 
 ## 8. Rare-state detection
 
@@ -158,8 +159,8 @@ cell2location ~26 min (run once on the fixed scenario).
 - The opt-in Poisson GLM bulk solver is the strongest validated algorithmic
   improvement in TissueResolve to date and is **recommended as an experimental bulk
   solver**, while `wNNLS` remains the default.
-- TissueResolve's default spatial solver has the best local RMSE and competitive fine
-  accuracy on the synthetic scenario.
+- TissueResolve's default spatial solver has the lowest local RMSE among the compared
+  methods and competitive fine accuracy on the synthetic scenario.
 - Adaptive-resolution and reference-uncertainty diagnostics separate identifiable from
   non-identifiable fine states.
 

@@ -446,7 +446,7 @@ Research software / pre-release (v0.1). Scope is classified in
 the opt-in Poisson GLM leads on bulk fine/broad accuracy, conditional within-family
 RMSE, and effective-N on breast + lung, beating `wNNLS`, external NNLS, MuSiC, and
 BisqueRNA at 20–40× lower runtime. Spatially, the default solver has the best local
-RMSE but oversmooths more than CARD; smoothing presets reduce but do not close that
+RMSE among compared methods but oversmooths more than CARD; smoothing presets reduce but do not close that
 gap. **Negative results are reported, not hidden** — regularization cannot recover
 non-identifiable collinear fine states, and TissueResolve declines to promise fine
 resolution the reference cannot support (it reports grouped/broad/unresolved instead).

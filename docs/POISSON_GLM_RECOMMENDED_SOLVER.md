@@ -77,7 +77,7 @@ YAML: `bulk_solver: { method: poisson_glm_experimental }`.
 ## Companion identifiability-aware reporting
 
 Every run now also emits (best-effort, reporting only — estimates unchanged), under
-`<out>/resolution/`: `adaptive_resolution.tsv` (best supported resolution per family)
+`<out>/resolution/`: `adaptive_resolution.tsv` (most strongly supported resolution per family)
 and, when the raw reference is available, `reference_uncertainty.tsv` /
 `state_reliability.tsv` / `family_reliability.tsv`. Use these to interpret which fine
 subtypes are trustworthy vs better reported at the family level.

@@ -9,7 +9,7 @@ trust and which should be interpreted at a coarser level. Outputs live under
 
 | file | what it tells you |
 |---|---|
-| `adaptive_resolution.tsv` | per broad family: the best *supported* resolution |
+| `adaptive_resolution.tsv` | per broad family: the most strongly *supported* resolution |
 | `reference_uncertainty.tsv` | per state: cells/donors, donor variability, marker stability, reliability |
 | `state_reliability.tsv` | per state: reliability score in [0,1] |
 | `family_reliability.tsv` | per family: mean/min reliability, total cells |
