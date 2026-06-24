@@ -194,8 +194,51 @@ CARD excluded (spatial). Mean over 5 scenarios:
 and effective-N calibration** (essentially exact, 16.1 vs 16.2). MuSiC is the closest
 competitor (best rare recall, but the **same high rare-FPR / lower-precision
 tradeoff** as the GLM); Bisque is conservative (high rare precision, low recall,
-weak accuracy). Limitations: breast only, seed 0; lung-external and
-BayesPrism/DWLS/SCDC are feasible via the same pipeline but **deferred** here.
+weak accuracy).
+
+### External comparison — lung (HLCA, 49 types, 5 seeds × 3 scenarios)
+`benchmarks/bulk/export_external_bulk_generic.py` + `run_external_bulk_generic.R` +
+`benchmarks/diagnostics/score_external_bulk_generic.py`. MuSiC + BisqueRNA executed
+on all 15 mixtures (donor-disjoint; identical reference rebuilt from the same
+exported cells). Mean over 15:
+
+| method | fine r | broad r | cond-RMSE | rare recall | rare prec | rare FPR | effN (truth 16.6) | runtime |
+|---|---|---|---|---|---|---|---|---|
+| **Poisson GLM** | **0.758** | **0.957** | **0.198** | 0.60 | **1.00** | **0.00** | 19.1 | ~7 s |
+| NB GLM | 0.760 | 0.957 | 0.196 | 0.70 | 1.00 | 0.00 | 19.1 | ~8 s |
+| MuSiC | 0.619 | 0.851 | 0.237 | **0.93** | 0.20 | 0.31 | 22.9 | ~150–300 s |
+| external NNLS | 0.611 | 0.919 | 0.297 | 0.40 | 0.07 | 0.21 | 13.0 | ~5 s |
+| wNNLS | 0.566 | 0.860 | 0.297 | 0.00 | 0.00 | 0.03 | 11.6 | ~8 s |
+| BisqueRNA | 0.378 | 0.657 | 0.300 | 0.60 | 0.06 | 0.31 | 15.2 | ~100–330 s |
+
+On the harder 49-type collinear atlas the **Poisson/NB GLM leads decisively** on
+accuracy, conditional within-family RMSE, FP-subtype rate, and effective-N — and is
+**20–40× faster** than the R tools. The lung rare type (NK) **is** identifiable, and
+the GLM detects it at **precision 1.0 / FPR 0.0** (recall 0.6–0.7) — better calibrated
+than MuSiC (over-calls: precision 0.20, FPR 0.31) and far better than wNNLS
+(recall 0.0). NB ≈ Poisson again.
+
+**External-tool status:** MuSiC + BisqueRNA executed on **both** breast (seed 0) and
+lung (5 seeds × 3 scenarios). **BayesPrism / DWLS / SCDC** were attempted but **all
+fail to install** in this environment (dependency/compilation chains: reticulate/
+RcppTOML, Seurat/SeuratObject, gplots/ROCR, spatstat, sctransform) → **deferred**,
+recorded, never fabricated. CARD excluded (spatial).
+
+### Rare-detection calibration on breast (P3)
+`benchmarks/diagnostics/rare_detection_calibration.py` (uses
+`experimental/rare_detection.py`). The layer's **average-precision vs base rate**
+diagnoses whether a rare type is detectable at all:
+- **regulatory T cell** (collinear): AP **0.27 < base rate 0.36** — *not identifiable*.
+  The gate can only trade recall for FPR (raw FPR 0.435 → 0.174 at recall 0.15→0.08);
+  it **cannot** reduce FPR without destroying recall, and the layer makes this explicit.
+- **natural killer cell** (distinct markers): AP **0.17 > base rate 0.083 (~2×)** —
+  *detectable*; the GLM already reaches precision 1.0 / FPR 0 and the layer tunes the
+  operating point.
+
+So the breast rare precision/FPR concern is **subtype-specific and identifiability-bound**:
+the count GLM + the opt-in detection layer handle identifiable rare types well
+(confirmed on lung NK: precision 1.0 / FPR 0) and honestly flag non-identifiable ones
+(reg-T) rather than over-calling.
 
 ### Rare-detection calibration layer (P2)
 `experimental/rare_detection.py` — an **opt-in, post-hoc decision layer** (not a
