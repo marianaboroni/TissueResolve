@@ -46,7 +46,7 @@ both breast and lung** — it lowered conditional RMSE in some settings only by
 increasing spillover and false-positive subtype detection. It is **experimental, a
 documented negative result, and not used by default**. Soft gating remains the
 final hierarchical layer. See
-[docs/FINE_GRANULARITY_REFINER_REPORT.md](docs/FINE_GRANULARITY_REFINER_REPORT.md).
+[docs/dev/FINE_GRANULARITY_REFINER_REPORT.md](docs/dev/FINE_GRANULARITY_REFINER_REPORT.md).
 
 ## What TissueResolve does
 
@@ -413,7 +413,7 @@ validation, and final API stabilization are complete.** The priority is to
 stabilize what exists, not to expand the tool.
 
 Research software / pre-release (v0.1). Scope is classified in
-[`docs/V0_1_SCOPE.md`](docs/V0_1_SCOPE.md) and
+[`docs/dev/V0_1_SCOPE.md`](docs/dev/V0_1_SCOPE.md) and
 [`docs/FEATURE_STATUS.md`](docs/FEATURE_STATUS.md):
 
 - **Core (default-safe):** reference-based bulk & spatial deconvolution,

@@ -62,7 +62,7 @@ smoothing parameter is unchanged.
 
 Enable it with `--spatial-preset weak_smoothing` (sets `lambda_spatial = 0.02`;
 the default is `0.1`). An explicit `--lambda-spatial` overrides the preset. See
-`docs/SPATIAL_WEAK_SMOOTHING_BENCHMARK_REPORT.md` for the full multi-dataset
+`docs/dev/SPATIAL_WEAK_SMOOTHING_BENCHMARK_REPORT.md` for the full multi-dataset
 evaluation.
 
 ## Reporting options
@@ -125,7 +125,7 @@ plain NNLS externally:
 
 | `--solver` | backbone |
 |---|---|
-| `auto` (default) | pick the best by gene-masking CV (see docs/gene_masking_cv.md) |
+| `auto` (default) | pick the best by gene-masking CV (see docs/dev/gene_masking_cv.md) |
 | `nnls` | plain NNLS on all shared genes |
 | `weighted_nnls` | specificity-weighted NNLS |
 | `marker_nnls` | NNLS on a top-marker panel |

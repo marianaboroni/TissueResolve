@@ -35,7 +35,7 @@ from `report/interpretation.py` and loading from `report/assets.py`.
 `generate_spatial_report` are **deprecated shims** that delegate to
 `orchestration`; the separate per-modality page renderer has been removed (the
 CLI/API and `tissueresolve run` all emit the unified report). See
-[`docs/REPORT_PATH_CONSOLIDATION_PLAN.md`](REPORT_PATH_CONSOLIDATION_PLAN.md).
+[`docs/dev/REPORT_PATH_CONSOLIDATION_PLAN.md`](dev/REPORT_PATH_CONSOLIDATION_PLAN.md).
 
 ## Generate a report
 

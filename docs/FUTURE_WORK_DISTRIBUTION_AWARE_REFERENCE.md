@@ -1,7 +1,7 @@
 # Future work — distribution-aware reference modeling (P2a/b)
 
 **This is future research and is not part of the alpha release.** No implementation is
-included. It extends the design in `docs/DISTRIBUTION_AWARE_REFERENCE_DESIGN.md` into a
+included. It extends the design in `docs/dev/DISTRIBUTION_AWARE_REFERENCE_DESIGN.md` into a
 prioritized roadmap, motivated by the alpha's central negative result: with a
 **mean-profile** reference, collinear fine states (Bhattacharyya > 0.97) are not
 identifiable, and no regularization recovers them. Raising that ceiling needs *more

@@ -134,5 +134,5 @@ python benchmarks/diagnostics/fine_refiner_benchmark.py --run-real-data --tissue
 integrated**. It lowered conditional RMSE in some settings only by **increasing
 pairwise spillover and false-positive subtype detection** (and inflating
 effective-N). Soft gating remains the final hierarchical layer. Full analysis:
-`docs/FINE_GRANULARITY_REFINER_REPORT.md`. (Outputs are written under the
+`docs/dev/FINE_GRANULARITY_REFINER_REPORT.md`. (Outputs are written under the
 git-ignored `benchmarks/outputs/`.)
