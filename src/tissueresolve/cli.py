@@ -553,6 +553,7 @@ def _execute_bulk(reference: str, query: str, outp: Path, cfg, resolution_mode: 
         from tissueresolve.bulk.hierarchical import save_hierarchical_bulk_outputs
         save_hierarchical_bulk_outputs(result, outp / "hierarchical")
     result._figures = _generate_run_figures(result, outp, "bulk")
+    _emit_resolution_diagnostics(result, ref, hierarchy_mapping, reference, cfg, outp)
     return result
 
 
@@ -622,7 +623,33 @@ def _execute_spatial(reference: str, query: str, outp: Path, cfg, resolution_mod
         save_hierarchical_spatial_outputs(result, outp / "hierarchical")
     result._figures = _generate_run_figures(result, outp, "spatial",
                                             array_row=array_row, array_col=array_col)
+    _emit_resolution_diagnostics(result, ref, hierarchy_mapping, reference, cfg, outp)
     return result
+
+
+def _emit_resolution_diagnostics(result, ref, mapping, reference_path, cfg, outp) -> None:
+    """Best-effort: write adaptive_resolution + reference_uncertainty report tables.
+
+    Reporting/QC only — never changes estimates and never breaks a run. Written
+    under ``<out>/resolution/`` whenever inputs allow (mapping for adaptive
+    resolution; raw reference AnnData for reference uncertainty)."""
+    try:
+        from tissueresolve.report.resolution_diagnostics import (
+            write_resolution_diagnostics, mean_unresolved_by_family)
+        um = None
+        try:
+            props = getattr(getattr(result, "deconv", None), "proportions", None)
+            if props is not None:
+                um = mean_unresolved_by_family(props)
+        except Exception:  # noqa: BLE001
+            um = None
+        write_resolution_diagnostics(
+            outp / "resolution", ref, mapping, reference_path=str(reference_path),
+            cell_type_col=getattr(cfg.reference, "celltype_col", "cell_type"),
+            donor_col=getattr(cfg.reference, "donor_col", "donor"),
+            unresolved_mass=um)
+    except Exception:  # noqa: BLE001 — diagnostics are best-effort
+        pass
 
 
 def _collect_run_warnings(result, modality: str) -> list[dict[str, str]]:

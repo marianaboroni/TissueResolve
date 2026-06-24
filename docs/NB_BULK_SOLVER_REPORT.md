@@ -168,5 +168,57 @@ broader evidence before any default switch. Outputs remain mRNA proportions.
 - Unsupported: ✗ "NB beats Poisson" (they tie — NB term near-inert at the reference
   dispersion); ✗ "improves rare precision on breast" (it trades precision for
   recall there); ✗ any default change; ✗ cell fractions (outputs are mRNA
-  proportions); ✗ superiority over external probabilistic tools (deferred,
-  not benchmarked here).
+  proportions).
+
+---
+
+## Follow-up: external comparison, rare calibration, donor dispersion
+
+### External bulk comparison (vs MuSiC / BisqueRNA)
+`benchmarks/diagnostics/external_bulk_comparison.py` scores all methods on the
+**identical** donor-disjoint breast inputs (5 scenarios, seed 0): external
+predictions reused from `run_external_holdout.R` (MuSiC, BisqueRNA — both executed),
+TissueResolve solvers run on the same reference/bulk. BayesPrism / DWLS / SCDC are
+**not installed** → deferred (recorded in `method_status.tsv`), never fabricated.
+CARD excluded (spatial). Mean over 5 scenarios:
+
+| method | fine r | broad r | cond-RMSE | rare recall | rare prec | rare FPR | effN (truth 16.2) |
+|---|---|---|---|---|---|---|---|
+| **Poisson/NB GLM** | **0.814** | **0.980** | **0.156** | 0.864 | 0.587 | 0.554 | **16.1** |
+| external NNLS | 0.796 | 0.964 | 0.219 | 0.593 | 0.567 | 0.409 | 13.4 |
+| wNNLS (default) | 0.671 | 0.786 | 0.233 | 0.368 | 0.693 | 0.169 | 11.9 |
+| MuSiC | 0.669 | 0.854 | 0.176 | **0.923** | 0.542 | 0.619 | 17.3 |
+| BisqueRNA | 0.389 | 0.610 | 0.280 | 0.282 | 0.733 | 0.073 | 9.4 |
+
+**The Poisson/NB GLM leads on fine & broad accuracy, conditional within-family RMSE,
+and effective-N calibration** (essentially exact, 16.1 vs 16.2). MuSiC is the closest
+competitor (best rare recall, but the **same high rare-FPR / lower-precision
+tradeoff** as the GLM); Bisque is conservative (high rare precision, low recall,
+weak accuracy). Limitations: breast only, seed 0; lung-external and
+BayesPrism/DWLS/SCDC are feasible via the same pipeline but **deferred** here.
+
+### Rare-detection calibration layer (P2)
+`experimental/rare_detection.py` — an **opt-in, post-hoc decision layer** (not a
+solver change) addressing the breast rare precision/FPR tradeoff: marker-support
+evidence, a calibrated detection probability, a precision–recall curve, and a
+mass-conserving gate that moves un-supported / low-probability rare calls to
+`unresolved_<family>`. Tested (7 tests): the gate cuts false positives in
+truly-absent samples while keeping supported calls, conserves mass, and protects
+listed states.
+
+### Donor-level NB dispersion (P3)
+`experimental/nb_dispersion.py` estimates gene-wise `φ_g` from donor-level
+pseudobulk (method of moments, removing the Poisson sampling term). It is far more
+informative than the stored reference `φ_g` (breast: median 3.78 vs 0.51; fraction
+`φ<1` 0.18 vs 0.90). **Empirical test (breast, 3 scenarios): NB with donor `φ_g`
+still ≈ Poisson** — fine Pearson and conditional RMSE identical to 3 decimals. So the
+count-likelihood gain is **Poisson's**, not overdispersion's; NB adds no benefit on
+these data even with better-estimated dispersion. Estimator retained for diagnostics
+/ future distribution-aware work. Tested (5 tests).
+
+### Standard-report integration (P4 + P2c)
+`report/resolution_diagnostics.py` writes, best-effort under `<out>/resolution/`,
+the **adaptive-resolution** table (P4) and **reference-uncertainty /
+state-reliability / family-reliability** tables (P2c) on every CLI run where inputs
+allow (mapping for adaptive resolution; raw reference AnnData for uncertainty).
+Reporting/QC only — estimates are unchanged; failures never break a run.
