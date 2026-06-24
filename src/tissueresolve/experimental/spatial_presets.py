@@ -61,6 +61,35 @@ SPATIAL_PRESETS: dict[str, dict] = {
         "state_regularization": {"enabled": True, "mode": "adaptive_resolution"},
         "description": "experimental: diagnostic state grouping / adaptive resolution "
                        "(estimates unchanged; reporting only)"},
+    # Experimental in-solver state-regularized solver presets (Option A; opt-in).
+    # A separate projected-gradient solver minimises a joint objective; the
+    # production NB-CAR solver is untouched. No-op for the state term unless a
+    # fine->broad family_map is supplied to deconv_spatial. NOT Redeconve.
+    "state_regularized_solver_experimental": {
+        "lambda_spatial": DEFAULT_LAMBDA_SPATIAL, "experimental": True,
+        "state_regularized_solver": {"enabled": True, "state_penalty": "competition",
+                                     "lambda_spatial": 0.02, "lambda_state": 0.01,
+                                     "lambda_sparse": 0.001},
+        "description": "experimental: in-solver state-regularized solver "
+                       "(competition penalty; separate projected-gradient path)"},
+    "state_regularized_solver_competition": {
+        "lambda_spatial": DEFAULT_LAMBDA_SPATIAL, "experimental": True,
+        "state_regularized_solver": {"enabled": True, "state_penalty": "competition",
+                                     "lambda_spatial": 0.02, "lambda_state": 0.01,
+                                     "lambda_sparse": 0.001},
+        "description": "experimental: in-solver state-regularized solver, competition penalty"},
+    "state_regularized_solver_laplacian": {
+        "lambda_spatial": DEFAULT_LAMBDA_SPATIAL, "experimental": True,
+        "state_regularized_solver": {"enabled": True, "state_penalty": "laplacian",
+                                     "lambda_spatial": 0.02, "lambda_state": 0.01,
+                                     "lambda_sparse": 0.001},
+        "description": "experimental: in-solver state-regularized solver, laplacian penalty"},
+    "state_regularized_solver_weak": {
+        "lambda_spatial": DEFAULT_LAMBDA_SPATIAL, "experimental": True,
+        "state_regularized_solver": {"enabled": True, "state_penalty": "competition",
+                                     "lambda_spatial": 0.02, "lambda_state": 0.005,
+                                     "lambda_sparse": 0.0},
+        "description": "experimental: in-solver state-regularized solver, weak competition"},
 }
 
 
@@ -77,6 +106,8 @@ class SpatialPresetInfo:
     min_edge_weight: float | None = None
     state_regularization: bool = False
     state_regularization_mode: str | None = None
+    state_regularized_solver: bool = False
+    state_solver_penalty: str | None = None
 
     def to_metadata(self) -> dict:
         return {
@@ -88,6 +119,8 @@ class SpatialPresetInfo:
             "min_edge_weight": self.min_edge_weight,
             "state_regularization_used": self.state_regularization,
             "state_regularization_mode": self.state_regularization_mode,
+            "state_regularized_solver_used": self.state_regularized_solver,
+            "state_solver_penalty": self.state_solver_penalty,
             "is_default_spatial_behaviour": self.is_default,
             "spatial_preset_experimental": self.experimental,
             "spatial_preset_description": self.description,
@@ -127,6 +160,14 @@ def apply_spatial_preset(cfg, preset: str) -> SpatialPresetInfo:
     elif hasattr(cfg, "state_regularization"):
         # presets without a state_regularization block must leave it disabled
         cfg.state_regularization.enabled = False
+    # optional in-solver state-regularized solver (experimental presets)
+    srs_spec = spec.get("state_regularized_solver")
+    if srs_spec is not None and hasattr(cfg, "state_regularized_solver"):
+        for key, val in srs_spec.items():
+            if hasattr(cfg.state_regularized_solver, key):
+                setattr(cfg.state_regularized_solver, key, val)
+    elif hasattr(cfg, "state_regularized_solver"):
+        cfg.state_regularized_solver.enabled = False
     lam = float(cfg.spatial_solver.lambda_spatial)
     info = SpatialPresetInfo(
         preset=preset,
@@ -141,4 +182,6 @@ def apply_spatial_preset(cfg, preset: str) -> SpatialPresetInfo:
     info.min_edge_weight = float(min_ew) if min_ew is not None else None
     info.state_regularization = bool(sr_spec is not None and sr_spec.get("enabled", False))
     info.state_regularization_mode = sr_spec.get("mode") if sr_spec is not None else None
+    info.state_regularized_solver = bool(srs_spec is not None and srs_spec.get("enabled", False))
+    info.state_solver_penalty = srs_spec.get("state_penalty") if srs_spec is not None else None
     return info
