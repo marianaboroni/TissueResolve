@@ -82,7 +82,7 @@ def test_available_presets():
 
 
 def test_report_documents_lambda_and_smoothing_status():
-    report = (REPO / "docs" / "SPATIAL_WEAK_SMOOTHING_BENCHMARK_REPORT.md").read_text()
+    report = (REPO / "docs" / "dev" / "SPATIAL_WEAK_SMOOTHING_BENCHMARK_REPORT.md").read_text()
     assert "0.02" in report and "0.1" in report
     assert "oversmoothing" in report.lower()
     assert "weak_smoothing" in report

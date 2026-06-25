@@ -309,7 +309,7 @@ def test_unified_report_builder_links_sections(tmp_path):
 
 def test_audit_doc_exists():
     from pathlib import Path
-    assert (Path(__file__).resolve().parents[2] / "docs" /
+    assert (Path(__file__).resolve().parents[2] / "docs" / "dev" /
             "project_structure_audit.md").exists()
 
 

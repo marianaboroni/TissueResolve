@@ -121,7 +121,7 @@ def test_external_benchmark_only_executed_or_imported_ranked():
 
 
 def test_publication_status_is_alpha():
-    for f in ("README.md", "docs/FEATURE_STATUS.md", "docs/V0_1_SCOPE.md"):
+    for f in ("README.md", "docs/FEATURE_STATUS.md", "docs/dev/V0_1_SCOPE.md"):
         txt = _flat((_ROOT / f).read_text()).lower()
         assert "alpha" in txt and "early-access" in txt, f
         assert "not yet" in txt and "publication-ready" in txt, f
