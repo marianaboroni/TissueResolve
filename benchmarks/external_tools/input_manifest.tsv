@@ -1,0 +1,3 @@
+tissue	modality	query	reference	gene_ids	truth
+breast	bulk	donor-held-out pseudobulk	breast SC (ref donors)	symbols	known (simulated)
+lung	bulk	donor-held-out pseudobulk	HLCA subset (ref donors)	symbols	known (simulated)

@@ -1,0 +1,1 @@
+"""Spatial benchmark method wrappers."""

@@ -1,0 +1,18 @@
+tool	modality	language	env	version	installed	license	gpu	official_source	notes
+NNLS_baseline	bulk	python	.venv	scipy	True	open	no	scipy.optimize.nnls	internal baseline
+WNNLS_baseline	bulk	python	.venv	internal	True	open	no	tissueresolve	internal weighted-NNLS baseline
+TissueResolve_flat	bulk+spatial	python	.venv	0.1	True	open	no	tissueresolve	flat fine-only
+TissueResolve_hierarchical	bulk+spatial	python	.venv	0.1	True	open	no	tissueresolve	broad->fine + soft gating + resolution decision
+MuSiC	bulk	R	envs/Rlib	1.0.0	True	GPL	no	github.com/xuranw/MuSiC	rpy2/Rscript bridge; gold_truth_external 2026-06-23: executed on breast+lung
+BisqueRNA	bulk	R	envs/Rlib	1.0.5	True	GPL-3	no	CRAN BisqueRNA	rpy2/Rscript bridge; gold_truth_external 2026-06-23: executed on breast+lung
+BayesPrism	bulk	R	envs/Rlib	2.2.3	True	GPL	no	github.com/Danko-Lab/BayesPrism	prior run failed/very slow (~2180s) in this env; gold_truth_external 2026-06-23: deferred (runtime)
+SCDC	bulk	R	-	-	False	open	no	github.com/meichendong/SCDC	not installed
+DWLS	bulk	R	-	-	False	open	no	bitbucket/ymwang/DWLS	not installed (prior: skipped)
+CIBERSORTx	bulk	web	-	-	False	ACADEMIC_LICENSE/WEB	no	cibersortx.stanford.edu	web/token-gated; export-only, cannot auto-run
+spacexr_RCTD	spatial	R	envs/Rlib	2.2.1	True	open	no	github.com/dmcable/spacexr	RCTD; Seurat absent (core RCTD usable)
+cell2location	spatial	python	envs/c2l_py39	0.1.4	True	Apache-2.0	mps(metal)	github.com/BayraktarLab/cell2location	scvi 1.1.6, torch 2.8 MPS; CPU/MPS slow (~160s+/run)
+CARD	spatial	R	envs/Rlib	1.1	True	GPL	no	github.com/YingMa0107/CARD	rpy2/Rscript bridge
+SPOTlight	spatial	R	-	-	False	open	no	Bioconductor SPOTlight	not installed
+Tangram	spatial	python	-	-	False	open	gpu	github.com/broadinstitute/Tangram	not installed
+NNLS_per_spot	spatial	python	.venv	scipy	True	open	no	scipy.optimize.nnls	internal spatial baseline
+NNLS_external_control	bulk	python	.venv	scipy	True	open	no	scipy.optimize.nnls	gold_truth_external control (shared reference signature, not TissueResolve solver); executed on breast+lung

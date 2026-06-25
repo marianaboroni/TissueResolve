@@ -92,7 +92,32 @@ python scripts/07_generate_reports.py
 python scripts/08_resolution_analysis.py
 #   apply merges (aggregate to families):
 python scripts/08_resolution_analysis.py --resolution-mode auto
+
+# 9) (optional) Hierarchical broad→fine deconvolution (bulk + spatial):
+python scripts/09_run_hierarchical_deconvolution.py
+#   bulk only (fast), or cap spatial spots for speed:
+python scripts/09_run_hierarchical_deconvolution.py --skip-spatial
+python scripts/09_run_hierarchical_deconvolution.py --max-spatial-spots 1200
 ```
+
+## Hierarchical broad→fine deconvolution (Stage 9)
+
+`scripts/09_run_hierarchical_deconvolution.py` runs the broad-to-fine workflow
+on the existing reference, pseudobulk, and Visium section. The reference has
+only the fine `cell_type` column, so a documented fine→broad mapping is used:
+`config/breast_cancer_cell_type_hierarchy.tsv` (8 families: Epithelial,
+Stromal/Fibroblast, Endothelial, Mural, T/NK, B/Plasma, Myeloid, Adipocyte).
+
+It writes to `outputs/hierarchical/`: `cell_type_hierarchy.tsv`,
+`bulk_family_proportions.tsv`, `bulk_hierarchical_fine_proportions.tsv`,
+`bulk_unresolved_family_mass.tsv`, `spatial_family_proportions.tsv`,
+`spatial_hierarchical_fine_proportions.tsv`,
+`spatial_unresolved_family_mass.tsv`, `hierarchical_qc.tsv`,
+`cell_type_color_map.tsv`, and `hierarchical_summary.md`. On this dataset the
+similar fine subtypes (T/NK, myeloid, endothelial, epithelial) are correctly
+reported as **unresolved family mass**: family-level accuracy improves while
+the tool refuses to overclaim subtypes it cannot separate. Run script 07
+afterwards to add a hierarchical section to the combined report.
 
 ## Resolution recommendation (Stage 8)
 

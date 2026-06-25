@@ -108,6 +108,8 @@ class SpatialPipeline:
         marker_genes: Optional[list[str]] = None,
         run_neighbourhood: bool = False,
         n_neighbourhood_perm: int = 99,
+        family_map: Optional[dict] = None,
+        rare_protection: Optional[list] = None,
     ) -> SpatialPipelineResult:
         """Run the full spatial deconvolution pipeline.
 
@@ -189,13 +191,7 @@ class SpatialPipeline:
             logger.debug("Separability check skipped: %s", e)
             sep_report = None
 
-        # 4. Spatial graph
-        graph = build_hex_graph_from_arrays(
-            array_row, array_col, spot_ids=spot_id_arr,
-            batch_size=self.cfg.spatial_solver.n_jobs or 500,
-        )
-
-        # 5. Subset Y to marker genes
+        # 4. Subset Y to marker genes (needed before the graph for edge-aware mode)
         visium_gene_to_col = {g: i for i, g in enumerate(visium_gene_names)}
         marker_col_idx = np.array(
             [visium_gene_to_col[g] for g in marker_genes if g in visium_gene_to_col],
@@ -207,6 +203,28 @@ class SpatialPipeline:
             Y_marker = np.asarray(Y[:, marker_col_idx], dtype=np.float32)
 
         ref_marker = ref.subset_genes(marker_genes)
+
+        # 5. Spatial graph (default: coordinate-only hex graph). Experimental
+        # opt-in: an edge-weighted graph so the existing CAR penalty smooths less
+        # across likely boundaries. Default behaviour is unchanged.
+        cfg_sp = self.cfg.spatial_solver
+        if getattr(cfg_sp, "edge_aware", False):
+            from tissueresolve.spatial.graph import build_edge_aware_spatial_graph
+            graph = build_edge_aware_spatial_graph(
+                array_row, array_col, Y_marker, spot_ids=spot_id_arr,
+                k_neighbors=cfg_sp.edge_aware_k_neighbors,
+                expression_weight=cfg_sp.edge_aware_expression_weight,
+                composition_weight=cfg_sp.edge_aware_composition_weight,
+                min_edge_weight=cfg_sp.edge_aware_min_weight,
+                max_edge_weight=cfg_sp.edge_aware_max_weight,
+                batch_size=cfg_sp.n_jobs or 500,
+            )
+            logger.info("Edge-aware spatial graph: %s", graph.metadata)
+        else:
+            graph = build_hex_graph_from_arrays(
+                array_row, array_col, spot_ids=spot_id_arr,
+                batch_size=cfg_sp.n_jobs or 500,
+            )
 
         # 6. Fit model
         cfg_s = self.cfg.spatial_solver
@@ -226,6 +244,24 @@ class SpatialPipeline:
         R_d = (model._R_lin * d_g[np.newaxis, :]).astype(np.float32) if (
             model._R_lin is not None and d_g is not None
         ) else None
+
+        # 6b. Experimental, opt-in state-similarity / sparsity refinement (post-fit,
+        # within-family, mass-conserving). Default OFF → Pi unchanged. No solver change.
+        state_meta: dict[str, Any] = {}
+        cfg_sr = getattr(self.cfg, "state_regularization", None)
+        if cfg_sr is not None and getattr(cfg_sr, "enabled", False):
+            Pi, state_meta = self._apply_state_regularization(
+                Pi, ref_marker, model.cell_types_, cfg_sr, family_map, rare_protection)
+
+        # 6c. Experimental, opt-in in-solver state-regularized optimiser (Option A;
+        # separate projected-gradient solver, production solver untouched). Default
+        # OFF → Pi unchanged. Uses the production fit above as the warm start.
+        solver_meta: dict[str, Any] = {}
+        cfg_srs = getattr(self.cfg, "state_regularized_solver", None)
+        if cfg_srs is not None and getattr(cfg_srs, "enabled", False):
+            Pi, solver_meta = self._apply_state_regularized_solver(
+                Pi, Y_marker, model, ref_marker, graph, lib_sizes,
+                cfg_srs, family_map, rare_protection)
 
         # 7. Spot QC — always pass model arrays so nb_loglik is non-NaN
         spot_qc_df = compute_spot_qc(
@@ -271,7 +307,23 @@ class SpatialPipeline:
             "lambda_spatial": model.lambda_spatial,
             "alpha": model.alpha,
             "estimate_type": "spot_rna_composition",
+            "edge_aware_smoothing_used": bool(getattr(cfg_sp, "edge_aware", False)),
+            "state_regularization_used": bool(state_meta.get("enabled", False)),
+            "state_regularized_solver_used": bool(solver_meta.get("enabled", False)),
         }
+        if state_meta:
+            for k, v in state_meta.items():
+                run_meta[f"state_reg_{k}"] = v
+        if solver_meta:
+            for k, v in solver_meta.items():
+                run_meta[f"state_solver_{k}"] = v
+        if getattr(cfg_sp, "edge_aware", False):
+            gm = getattr(graph, "metadata", {}) or {}
+            for key in ("edge_weight_min", "edge_weight_max", "edge_weight_mean",
+                        "edge_weight_median", "k_neighbors", "used_initial_proportions",
+                        "fallback", "expression_weight", "composition_weight"):
+                if key in gm:
+                    run_meta[f"edge_{key}" if not key.startswith("edge_") else key] = gm[key]
         run_meta.update(model_qc)
 
         deconv = SpatialDeconvResult(
@@ -303,3 +355,147 @@ class SpatialPipeline:
             model=model,
             run_metadata=run_meta,
         )
+
+    # ------------------------------------------------------------------
+    # Experimental, opt-in post-fit state-similarity refinement
+    # ------------------------------------------------------------------
+
+    def _apply_state_regularization(
+        self, Pi, ref_marker, cell_types, cfg_sr, family_map, rare_protection,
+    ):
+        """Apply the experimental within-family state refinement to ``Pi``.
+
+        Default behaviour is never reached (gated on ``cfg_sr.enabled``). Returns
+        ``(Pi_refined, metadata)``. On any failure it falls back to the input
+        ``Pi`` and records the reason — it must never break a spatial run.
+        """
+        from tissueresolve.experimental.state_similarity_regularization import (
+            compute_state_similarity_graph, apply_state_regularized_refinement,
+            recommend_state_groups,
+        )
+
+        meta: dict[str, Any] = {
+            "enabled": True, "mode": cfg_sr.mode,
+            "lambda_state": float(cfg_sr.lambda_state),
+            "lambda_sparse": float(cfg_sr.lambda_sparse),
+            "within_family_only": bool(cfg_sr.within_family_only),
+            "preserve_broad_mass": bool(cfg_sr.preserve_broad_mass),
+            "family_map_provided": family_map is not None,
+            "feature_status": "experimental",
+        }
+        if cfg_sr.within_family_only and family_map is None:
+            warnings.warn(
+                "state_regularization enabled with within_family_only=True but no "
+                "family_map was provided; the state graph has no within-family edges "
+                "so the refinement is a no-op.  Pass family_map={fine: broad} to "
+                "deconv_spatial to enable within-family refinement.", stacklevel=2)
+
+        try:
+            profiles = ref_marker.as_R_cpm()  # (K, G_m)
+            graph = compute_state_similarity_graph(
+                profiles, list(cell_types), family_map=family_map,
+                method=cfg_sr.similarity_method, k_states=cfg_sr.k_states,
+                min_similarity=cfg_sr.min_similarity,
+                within_family_only=cfg_sr.within_family_only)
+            meta["state_graph_n_edges"] = graph.n_edges
+            meta["state_graph_n_components"] = graph.metadata["n_connected_components"]
+
+            df = pd.DataFrame(Pi, columns=list(cell_types))
+
+            if cfg_sr.mode == "adaptive_resolution":
+                rec = recommend_state_groups(
+                    graph, family_map=family_map, threshold=cfg_sr.group_threshold,
+                    rare_protection=rare_protection)
+                meta["adaptive_recommended_groups"] = rec["recommended_groups"]
+                meta["adaptive_n_groups"] = rec["n_groups"]
+                meta["estimates_modified"] = False
+                return Pi, meta  # diagnostic only — estimates unchanged
+
+            lam_state = 0.0 if cfg_sr.mode == "sparsity" else cfg_sr.lambda_state
+            refined, rmeta = apply_state_regularized_refinement(
+                df, state_graph=graph, family_map=family_map,
+                lambda_state=lam_state, lambda_sparse=cfg_sr.lambda_sparse,
+                preserve_broad_mass=cfg_sr.preserve_broad_mass,
+                rare_protection=rare_protection)
+            meta.update({
+                "n_families_refined": rmeta["n_families_refined"],
+                "mass_shifted_state": rmeta["mass_shifted_state"],
+                "mass_shifted_sparse": rmeta["mass_shifted_sparse"],
+                "broad_mass_max_deviation": rmeta["broad_mass_max_deviation"],
+                "estimates_modified": True,
+            })
+            return refined.to_numpy(dtype=np.float32), meta
+        except Exception as exc:  # noqa: BLE001 — never break a run
+            warnings.warn(
+                f"state_regularization refinement failed ({exc}); returning "
+                "un-refined spatial estimates.", stacklevel=2)
+            meta["error"] = str(exc)
+            meta["estimates_modified"] = False
+            return Pi, meta
+
+    def _apply_state_regularized_solver(
+        self, Pi, Y_marker, model, ref_marker, graph, lib_sizes,
+        cfg_srs, family_map, rare_protection,
+    ):
+        """Run the experimental in-solver state-regularized optimiser (Option A).
+
+        Uses the production NB-CAR fit ``Pi`` as the warm start and minimises the
+        joint objective. Falls back to ``Pi`` on any failure (never breaks a run).
+        """
+        from tissueresolve.experimental.state_similarity_regularization import (
+            compute_state_similarity_graph)
+        from tissueresolve.experimental.state_regularized_solver import (
+            fit_state_regularized_spatial)
+
+        meta: dict[str, Any] = {
+            "enabled": True, "optimizer": cfg_srs.optimizer,
+            "state_penalty": cfg_srs.state_penalty,
+            "lambda_spatial": float(cfg_srs.lambda_spatial),
+            "lambda_state": float(cfg_srs.lambda_state),
+            "lambda_sparse": float(cfg_srs.lambda_sparse),
+            "within_family_only": bool(cfg_srs.within_family_only),
+            "preserve_broad_mass": bool(cfg_srs.preserve_broad_mass),
+            "family_map_provided": family_map is not None,
+            "feature_status": "experimental",
+        }
+        if cfg_srs.within_family_only and family_map is None:
+            warnings.warn(
+                "state_regularized_solver enabled with within_family_only=True but no "
+                "family_map was provided; the state graph has no within-family edges "
+                "so the state penalty is inactive (recon+spatial+sparsity only).",
+                stacklevel=2)
+        try:
+            cell_types = list(model.cell_types_)
+            R_cpm = ref_marker.as_R_cpm()            # (K, G_m), rows ~ CPM
+            R_lin = (R_cpm / 1e6).astype(np.float64)  # proportion scale
+            state_graph = compute_state_similarity_graph(
+                R_cpm, cell_types, family_map=family_map,
+                within_family_only=cfg_srs.within_family_only)
+            rare_dict = ({s: 0.02 for s in rare_protection} if rare_protection else None)
+            res = fit_state_regularized_spatial(
+                Y_marker, R_lin, spot_graph=graph, state_graph=state_graph,
+                cell_types=cell_types, init_theta=Pi, lib_sizes=lib_sizes,
+                lambda_spatial=cfg_srs.lambda_spatial, lambda_state=cfg_srs.lambda_state,
+                lambda_sparse=cfg_srs.lambda_sparse, state_penalty=cfg_srs.state_penalty,
+                within_family_only=cfg_srs.within_family_only,
+                preserve_broad_mass=cfg_srs.preserve_broad_mass, family_map=family_map,
+                rare_protection=rare_dict, max_iter=cfg_srs.max_iter, tol=cfg_srs.tol,
+                optimizer=cfg_srs.optimizer)
+            meta.update({
+                "n_iter": res.n_iter, "converged": res.converged,
+                "loss_monotonic": res.loss_monotonic, "final_loss": res.final_loss,
+                "recon_loss": res.recon_loss, "spatial_penalty": res.spatial_penalty,
+                "state_penalty_value": res.state_penalty,
+                "sparsity_penalty": res.sparsity_penalty,
+                "state_graph_edges": state_graph.n_edges,
+                "rare_protection_used": bool(rare_dict),
+                "estimates_modified": True,
+            })
+            return res.theta.astype(np.float32), meta
+        except Exception as exc:  # noqa: BLE001 — never break a run
+            warnings.warn(
+                f"state_regularized_solver failed ({exc}); returning production "
+                "spatial estimates.", stacklevel=2)
+            meta["error"] = str(exc)
+            meta["estimates_modified"] = False
+            return Pi, meta

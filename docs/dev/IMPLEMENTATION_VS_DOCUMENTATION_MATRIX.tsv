@@ -1,0 +1,22 @@
+feature	documented	implemented	exposed_in_cli	exposed_in_api	tested	appears_in_report	output_generated	status	documentation_action	code_action
+bulk deconvolution	yes	yes	yes	yes	yes	yes	yes	stable	none	none
+spatial deconvolution	yes	yes	yes	yes	yes	yes	yes	stable	none	none
+solver auto	yes	yes	yes	yes	yes	yes	yes	stable	none	none
+broad/fine hierarchy	yes	yes	yes	yes	yes	yes	yes	stable	none	none
+unresolved mass	yes	yes	yes	yes	yes	yes	yes	stable	none	none
+reference suitability	yes	yes	no	yes	yes	yes	yes	stable	none	consider CLI surfacing (deferred)
+separability/spillover	yes	yes	no	yes	yes	yes	yes	stable	none	none
+QC-first report	yes	yes	yes	yes	yes	yes	yes	stable	none	none
+bulk benchmark	yes	yes	no (script only)	partial	yes	yes	yes	partial	clarify script-vs-CLI	none
+spatial benchmark	yes	yes	yes (synthetic) / script (real)	partial	yes	yes	yes	partial	keep no-ground-truth caveat	wire multi-metric ranking into run (deferred)
+external benchmark runners	yes	yes (run/import; many tools skip)	no (scripts)	no	yes	yes	yes	partial	keep executed/imported/exported/skipped taxonomy	execute >=3 bulk + >=3 spatial tools (deferred)
+state-aware hierarchy	yes (experimental)	yes	yes (--state-aware)	yes	yes	partial	yes	experimental	keep experimental label	validate on real data (deferred)
+granular signatures	yes (experimental)	yes	no	yes	yes	no	yes	experimental	keep experimental label	none
+reference adaptation	yes (deferred)	no	no	no	no	no	no	not_implemented	keep "not implemented" label	do not enable/claim
+expression reconstruction	yes (deferred)	no	no	no	no	no	no	not_implemented	keep "not implemented" label	do not enable/claim
+hyperparameter tuning	yes (deferred)	no (quarantined stub raises)	no	no	yes (quarantine test)	no	no	not_implemented	keep "not implemented" label	keep quarantined until v0.2
+report appendix	yes	yes	yes (via report layer)	yes	yes	yes	yes	stable	none	none
+CLI quickstart	yes	yes	yes	n/a	yes	n/a	n/a	stable	keep run-output claims honest	none
+tissueresolve run report bundle (report.html/methods.txt/warnings.json)	yes	yes (run writes report.html/methods.txt/warnings.json; no standalone figures)	yes (run)	yes	yes	yes	yes	stable	none	standalone figure files still via report layer/harness (deferred)
+mRNA-content correction (cell fractions)	yes	yes	no	yes	yes	yes	on request	partial	keep explicit-opt-in wording	none
+</content>

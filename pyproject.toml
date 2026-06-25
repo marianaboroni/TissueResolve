@@ -7,7 +7,7 @@ name = "tissueresolve"
 version = "0.1.0"
 description = "Unified cell-type deconvolution for bulk RNA-seq and 10x Visium spatial transcriptomics"
 readme = "README.md"
-license = { text = "BSD-3-Clause" }
+license = { text = "MIT" }
 requires-python = ">=3.9"
 keywords = [
     "bioinformatics",
@@ -19,7 +19,7 @@ keywords = [
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: BSD Software License",
+    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
@@ -64,6 +64,13 @@ realdata = [
     # Kept out of [all] because it is a heavy, opt-in dependency.
     "cellxgene-census",
 ]
+benchmark = [
+    # Optional benchmark harness (benchmarks/).  The benchmark runs with only
+    # internal baselines using the core deps; these extras enable richer plots.
+    # External comparison tools (MuSiC, RCTD, cell2location, …) are installed
+    # separately and skipped gracefully when absent.
+    "plotly>=5.18",
+]
 all = [
     "tissueresolve[spatial,report,plots,dev]",
 ]
@@ -78,7 +85,7 @@ where = ["src"]
 tissueresolve = ["data/gene_lists/*.tsv", "data/gene_lists/*.txt"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "examples/real_breast_cancer/tests"]
+testpaths = ["tests", "examples/real_breast_cancer/tests", "benchmarks/tests"]
 addopts = "-v --tb=short"
 
 [tool.coverage.run]

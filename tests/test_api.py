@@ -43,6 +43,54 @@ class TestDeconvBulk:
         assert isinstance(result.deconv, BulkDeconvResult)
         assert result.deconv.ESTIMATE_TYPE == "mRNA_proportion"
 
+    def test_returns_hierarchical_bulk_result(self):
+        from tissueresolve.results import ReferenceSignature
+
+        genes = [f"G{i:03d}" for i in range(6)]
+        cell_types = ["CD4 T cell", "CD8 T cell", "macrophage"]
+        R_cpm = np.array([
+            [1000, 1000, 10, 10, 10, 10],
+            [1000, 900, 10, 10, 10, 10],
+            [10, 10, 1000, 1000, 1000, 1000],
+        ], dtype=np.float32)
+        ref = ReferenceSignature(
+            gene_names=genes,
+            cell_types=cell_types,
+            R_cpm=R_cpm,
+            R_log=np.log1p(R_cpm).astype(np.float32),
+            phi_g=np.full(len(genes), 5.0, dtype=np.float32),
+            n_cells_per_type={ct: 100 for ct in cell_types},
+        )
+        bulk = pd.DataFrame(
+            {"sample_0": [200.0, 200.0, 60.0, 60.0, 60.0, 60.0]},
+            index=genes,
+        )
+
+        result = tr.deconv_bulk(
+            bulk,
+            ref,
+            resolution_mode="hierarchical",
+            n_bootstrap=0,
+        )
+
+        props = result.deconv.proportions
+        # Every fine cell type appears as a column (possibly zeroed when its
+        # family is reported as unresolved); total mass is preserved.
+        assert result.deconv.proportions.index.tolist() == ["sample_0"]
+        assert set(cell_types) <= set(props.columns)
+        assert props.sum(axis=1).iloc[0] == pytest.approx(1.0)
+        assert result.deconv.run_metadata["resolution_mode"] == "hierarchical"
+        # New broad-to-fine contract: a full hierarchical result is returned
+        # with family / conditional / fine breakdowns and a resolvability QC.
+        assert hasattr(result, "estimates")
+        est = result.estimates
+        assert est.family_proportions.sum(axis=1).iloc[0] == pytest.approx(1.0)
+        # CD4/CD8 T cells are near-identical here → their family is unresolved,
+        # so an unresolved_<family> column carries that mass.
+        unresolved_cols = [c for c in props.columns if c.startswith("unresolved_")]
+        assert unresolved_cols, "expected an unresolved family column"
+        assert est.metadata["n_unresolved_families"] >= 1
+
 
 class TestDeconvSpatialAndDownstream:
     def _run(self):

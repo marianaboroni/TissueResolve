@@ -30,6 +30,9 @@ __all__ = [
     "build_hex_graph_from_arrays",
     "build_expression_weighted_graph",
     "compute_spatial_batches",
+    "WeightedSpatialGraph",
+    "compute_edge_aware_graph",
+    "build_edge_aware_spatial_graph",
 ]
 
 logger = logging.getLogger("tissueresolve.spatial.graph")
@@ -77,6 +80,7 @@ class SpatialGraph:
     n_spots: int
     spot_ids: Optional[np.ndarray] = None
     batches: list[np.ndarray] = field(default_factory=list)
+    metadata: dict = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.A.shape != (self.n_spots, self.n_spots):
@@ -436,3 +440,142 @@ def _build_graph_from_arrays(
         n_spots=N,
         spot_ids=spot_ids,
     )
+
+
+# ---------------------------------------------------------------------------
+# Edge-aware (in-solver) weighted graph — experimental, opt-in
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class WeightedSpatialGraph:
+    """Sparse edge list with per-edge weights (small across likely boundaries)."""
+
+    indices_i: np.ndarray
+    indices_j: np.ndarray
+    weights: np.ndarray
+    n_spots: int
+    metadata: dict = field(default_factory=dict)
+
+
+def _hex_edges(array_row, array_col):
+    """Directed hex neighbour edge list (i, j) and per-spot degree."""
+    coord_to_idx = {(int(r), int(c)): i
+                    for i, (r, c) in enumerate(zip(array_row, array_col))}
+    ii, jj = [], []
+    degree = np.zeros(len(array_row), dtype=np.int32)
+    for i, (r, c) in enumerate(zip(np.asarray(array_row).tolist(),
+                                   np.asarray(array_col).tolist())):
+        for dr, dc in _HEX_OFFSETS:
+            j = coord_to_idx.get((r + dr, c + dc))
+            if j is not None:
+                ii.append(i); jj.append(j); degree[i] += 1
+    return np.asarray(ii, dtype=np.int32), np.asarray(jj, dtype=np.int32), degree
+
+
+def compute_edge_aware_graph(
+    expression,
+    coordinates=None,
+    array_row=None,
+    array_col=None,
+    initial_proportions=None,
+    k_neighbors: int = 6,
+    expression_weight: float = 1.0,
+    composition_weight: float = 0.0,
+    min_edge_weight: float = 0.05,
+    max_edge_weight: float = 1.0,
+    scale: str = "adaptive",
+) -> WeightedSpatialGraph:
+    """Per-edge weights for the hex spot graph: LOW across likely boundaries.
+
+    Evidence: expression distance between neighbouring spots (library-normalized,
+    per-gene z-scored) and, optionally, composition distance from an initial fit.
+    ``edge_weight_ij = exp(-d_ij / scale)`` clipped to ``[min, max]``;
+    zero-distance neighbours get ``max_edge_weight``. Coordinates may be given as
+    ``array_row``/``array_col`` (Visium) or a 2-col ``coordinates`` array.
+    """
+    if array_row is None or array_col is None:
+        coords = np.asarray(coordinates)
+        array_row, array_col = coords[:, 0].astype(int), coords[:, 1].astype(int)
+    ii, jj, degree = _hex_edges(array_row, array_col)
+    n = len(array_row)
+
+    X = np.asarray(expression.toarray() if hasattr(expression, "toarray") else expression,
+                   dtype=float)
+    lib = X.sum(1, keepdims=True); lib[lib == 0] = 1.0
+    Xn = X / lib                                   # library-normalized
+    Xz = (Xn - Xn.mean(0)) / (Xn.std(0) + 1e-8)    # per-gene z-score
+    P = None
+    if initial_proportions is not None and composition_weight > 0:
+        P = np.asarray(initial_proportions.values if hasattr(initial_proportions, "values")
+                       else initial_proportions, dtype=float)
+
+    if ii.size == 0:
+        return WeightedSpatialGraph(ii, jj, np.zeros(0), n,
+                                    {"edge_aware": True, "n_edges": 0, "fallback": True})
+
+    de = np.linalg.norm(Xz[ii] - Xz[jj], axis=1) / np.sqrt(Xz.shape[1])
+    wsum = expression_weight + (composition_weight if P is not None else 0.0)
+    wsum = wsum if wsum > 0 else 1.0
+    if P is not None:
+        dc = 0.5 * np.abs(P[ii] - P[jj]).sum(1)
+        d = (expression_weight * de + composition_weight * dc) / wsum
+    else:
+        d = de
+    s = float(np.median(d)) if scale == "adaptive" else float(scale)
+    s = s if s > 1e-9 else 1.0
+    w = np.exp(-d / s)
+    # normalise to [0,1] then rescale to [min,max]; identical spots -> max
+    lo, hi = w.min(), w.max()
+    w01 = (w - lo) / (hi - lo) if hi > lo else np.ones_like(w)
+    w = np.clip(min_edge_weight + w01 * (max_edge_weight - min_edge_weight),
+                min_edge_weight, max_edge_weight)
+    meta = {
+        "edge_aware": True, "n_edges": int(ii.size), "k_neighbors": int(k_neighbors),
+        "expression_weight": float(expression_weight),
+        "composition_weight": float(composition_weight if P is not None else 0.0),
+        "used_initial_proportions": P is not None, "scale": s,
+        "edge_weight_min": float(w.min()), "edge_weight_max": float(w.max()),
+        "edge_weight_mean": float(w.mean()), "edge_weight_median": float(np.median(w)),
+        "fallback": False,
+    }
+    return WeightedSpatialGraph(ii, jj, w.astype(np.float32), n, meta)
+
+
+def build_edge_aware_spatial_graph(
+    array_row, array_col, expression, *, spot_ids=None,
+    initial_proportions=None, k_neighbors: int = 6,
+    expression_weight: float = 1.0, composition_weight: float = 0.0,
+    min_edge_weight: float = 0.05, max_edge_weight: float = 1.0,
+    batch_size: int = 500,
+) -> SpatialGraph:
+    """Build a row-normalized **weighted** SpatialGraph for the existing solver.
+
+    Falls back to the standard hex graph if no edges/expression are available.
+    The solver consumes ``A``/``L`` exactly as for the unweighted graph.
+    """
+    array_row = np.asarray(array_row, dtype=np.int32)
+    array_col = np.asarray(array_col, dtype=np.int32)
+    n = len(array_row)
+    wg = compute_edge_aware_graph(
+        expression, array_row=array_row, array_col=array_col,
+        initial_proportions=initial_proportions, k_neighbors=k_neighbors,
+        expression_weight=expression_weight, composition_weight=composition_weight,
+        min_edge_weight=min_edge_weight, max_edge_weight=max_edge_weight)
+    if wg.metadata.get("fallback") or wg.weights.size == 0:
+        g = build_hex_graph_from_arrays(array_row, array_col, spot_ids=spot_ids,
+                                        batch_size=batch_size)
+        g.metadata = {"edge_aware": False, "fallback": True}
+        return g
+    A_w = sp.coo_matrix((wg.weights, (wg.indices_i, wg.indices_j)),
+                        shape=(n, n), dtype=np.float32).tocsr()
+    row_sum = np.asarray(A_w.sum(1)).ravel()
+    inv = np.where(row_sum > 0, 1.0 / row_sum, 0.0).astype(np.float32)
+    A_norm = (sp.diags(inv, format="csr") @ A_w).astype(np.float32)
+    L = (sp.eye(n, format="csr", dtype=np.float32) - A_norm).astype(np.float32)
+    degree = np.diff(A_w.tocsr().indptr).astype(np.int32)
+    g = SpatialGraph(A=A_norm, L=L, degree=degree, n_spots=n,
+                     spot_ids=np.asarray(spot_ids) if spot_ids is not None else None)
+    g.batches = compute_spatial_batches(array_row, array_col, batch_size=batch_size)
+    g.metadata = wg.metadata
+    return g

@@ -1,21 +1,29 @@
 """
 Report generation for TissueResolve.
 
-Submodules (implemented in Stage 5):
-
-``html``
-    Unified HTMLReport with bulk and spatial variants.
-    Self-contained HTML output with embedded CSS.
+Canonical path
+--------------
+``orchestration``
+    The single entry point: builds ordered ``(title, body)`` sections from a
+    results directory **or** an in-memory pipeline result and renders them
+    through the unified single-page shell (``unified`` + ``components``).
 
 ``methods_text``
-    Auto-generated methods section text suitable for publication.
-    Includes algorithm description, parameter values, and software versions.
+    Auto-generated methods text suitable for publication.
 
-``templates``, ``sections``, ``assets``
-    HTML skeleton, section builders, and results-directory loaders for the
-    publication-layer reports.
+``sections`` / ``interpretation`` / ``assets``
+    Results-directory section builders (content + data-driven prose).
+
+``result_sections``
+    In-memory result section builders (the counterpart of ``sections`` for a
+    pipeline result), consumed by ``orchestration``.
+
+``html``
+    **Deprecated** compatibility shim — its public functions delegate to
+    ``orchestration``; it re-exports the ``result_sections`` builders for
+    backward compatibility only.
 """
-from tissueresolve.report.html import (
+from tissueresolve.report.orchestration import (
     generate_bulk_report,
     generate_report,
     generate_spatial_report,

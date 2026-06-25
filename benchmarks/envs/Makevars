@@ -1,0 +1,8 @@
+# Toolchain fix: point R's C/C++ compiles at the macOS SDK headers so packages
+# with C++ source (CARD, etc.) can build (clang here otherwise misses <vector>).
+CPPFLAGS = -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk
+CFLAGS = -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -O2
+CXXFLAGS = -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -I/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -O2
+CXX11FLAGS = -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -I/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -O2
+CXX14FLAGS = -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -I/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -O2
+CXX17FLAGS = -isysroot /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk -I/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/usr/include/c++/v1 -O2

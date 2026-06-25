@@ -67,3 +67,17 @@ def test_save_color_map(tmp_path):
     assert p.exists()
     df = pd.read_csv(p, sep="\t")
     assert {"cell_type", "family", "short_label", "color"}.issubset(df.columns)
+
+
+def test_color_dicts_from_map():
+    from tissueresolve.plotting.palette import (
+        build_hierarchical_color_map, color_dicts_from_map)
+    fine = ["CD8 T cell", "CD4 T cell", "macrophage", "Other"]
+    mp = {"CD8 T cell": "T/NK", "CD4 T cell": "T/NK", "macrophage": "Myeloid"}
+    cm = build_hierarchical_color_map(fine, mp)
+    fine_colors, broad_colors = color_dicts_from_map(cm)
+    # fine dict keyed by fine label, broad dict keyed by family
+    assert "CD8 T cell" in fine_colors and "Other" in fine_colors
+    assert "T/NK" in broad_colors and "Myeloid" in broad_colors
+    # fine T/NK members differ from each other but both relate to T/NK family
+    assert fine_colors["CD8 T cell"] != fine_colors["macrophage"]

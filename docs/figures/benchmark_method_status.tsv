@@ -1,0 +1,17 @@
+modality	method	status	note
+bulk	TissueResolve wNNLS	executed	default solver
+bulk	TissueResolve Poisson GLM	executed	recommended experimental
+bulk	TissueResolve NB GLM	executed	≈ Poisson; not recommended over Poisson
+bulk	external NNLS	executed	control
+bulk	MuSiC	executed	breast + lung
+bulk	BisqueRNA	executed	breast + lung
+bulk	BayesPrism	deferred	install failed (deps/compilation)
+bulk	DWLS	deferred	install failed (deps/compilation)
+bulk	SCDC	deferred	install failed (deps/compilation)
+spatial	TissueResolve flat/default	executed	NB-CAR
+spatial	TissueResolve weak_smoothing	executed	experimental
+spatial	TissueResolve edge_aware_smoothing	executed	experimental
+spatial	CARD	executed	seed-0 synthetic
+spatial	RCTD	executed	prior session, same scenario
+spatial	cell2location	executed	prior session, same scenario
+spatial	SPOTlight / Tangram / DestVI	deferred	not installed

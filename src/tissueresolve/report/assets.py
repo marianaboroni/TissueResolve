@@ -1,7 +1,9 @@
 """
-Asset/data loading helpers for results-directory-driven reports.
+Asset/data loading helpers for results-directory reports (content layer).
 
-Reads whatever tables/figures exist in a results directory (tolerant of
+Used by :mod:`tissueresolve.report.sections` to feed the canonical
+orchestration/unified report.  Reads whatever tables/figures exist in a results
+directory (tolerant of
 missing pieces — they render as "not available" rather than failing) and lists
 figure HTML files for embedding.
 """

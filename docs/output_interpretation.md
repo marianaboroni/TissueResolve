@@ -4,6 +4,17 @@ The single most important rule: **know what the numbers mean before you use
 them.** TissueResolve labels its estimate types explicitly and refuses to
 silently convert between them.
 
+## One run = one modality (and the combined report)
+
+A single `tissueresolve run` processes **one** modality (bulk *or* spatial) and
+writes to its own output directory. Run bulk and spatial into **separate**
+directories (`results/bulk`, `results/spatial`); writing a different-modality
+run into a non-empty directory is refused unless you pass `--force`. A combined
+report produced by `tissueresolve combine-report` summarises **two separate
+runs sharing a reference** — it is **not** a single joint bulk+spatial model.
+Read the bulk and spatial sections (and their warnings) independently; the
+estimate-type rules below apply per modality.
+
 ## Bulk: mRNA proportions ≠ cell fractions
 
 `BulkDeconvResult.proportions` contains **RNA-derived mRNA proportions**
@@ -70,6 +81,51 @@ pretending otherwise.
 - **Unresolved mode** — when a family is not resolvable (low separability, high
   spillover, high uncertainty), its mass is reported as `unresolved_<family>`
   instead of being confidently split into subtypes. Total mass is preserved.
+- **Trusted resolution by family** (Resolution Decision Layer,
+  `src/tissueresolve/resolution.py`). Before fine predictions are interpreted, each
+  broad family is classified as:
+  - `full_fine` — full fine composition is supportable (still soft-gated);
+  - `selected_fine` — only the supported subtypes are trusted; the rest are routed
+    to unresolved / shown as not trusted;
+  - `broad_only` — subtypes are not reliably deconvolvable in the full panel; broad
+    mass is trusted and any fine split is **diagnostic only**.
+  The decision is driven by **full-panel deconvolution reliability** and within-family
+  separability / query compatibility — **not** by cell-level classification AUROC
+  (which is reported but never a decision criterion). It distinguishes three
+  identifiability levels that must not be conflated: cell classifiability, pairwise
+  mixture recovery, and full-panel reliability; only the third drives trusted status.
+  Missing evidence ⇒ the more conservative resolution. The status is recorded in run
+  metadata (`trusted_resolution`, `resolution_decision`) and the per-family QC table,
+  so it affects the outputs, not only the report.
+- **Within-family gating mode** (`--hierarchical-gating`, hierarchical mode only):
+  - `soft` *(default)* — **partial confidence-weighted** unresolved mass. Each
+    subtype's mass is multiplied by a calibrated confidence in [0,1]; the residual
+    family mass goes to `unresolved_<family>`. Family and total mass are conserved.
+    Validated on breast and lung benchmarks.
+  - `hard` *(legacy)* — binary threshold gate (confident subtypes keep full mass,
+    the rest are zeroed to unresolved). Kept for reproducibility, but it
+    **over-abstains in collinear families** (large unresolved fractions, collapsed
+    effective-N); not recommended as a default.
+  - `ungated` *(diagnostic only)* — no abstention; not calibrated.
+  The run metadata records the active mode, version, mass-conservation error,
+  unresolved-mass summary, and validation status. A high cell-classification AUROC
+  is **not** proof that a subtype can be reliably deconvolved from a mixture, and
+  values are **RNA-derived proportions, not cell fractions**.
+- **Spillover & false-positive caution for fine predictions.** In collinear
+  families (subtypes sharing 96–99% of their signature), within-family conditional
+  estimates carry real risk of *spillover* (mass leaking onto the wrong subtype)
+  and *false-positive detection* (non-zero estimates for truly absent subtypes).
+  Trust subtype-level splits only where within-family resolution is high; otherwise
+  prefer the broad family or `unresolved_<family>`. Fine predictions are always
+  **gated by trusted resolution** — they are not presented as reliable just because
+  they are non-zero.
+- **Fine-granularity refinement (experimental, NOT used).** A compact fine-level
+  refiner (contrast-weighted WNNLS / residual contrasts / spillover calibration)
+  was tested to force higher subtype resolution in collinear families. It **failed
+  promotion on breast and lung** — it lowered conditional RMSE in some settings only
+  by **increasing spillover and false-positive subtype detection**, so it remains a
+  documented negative result and is **not applied**. Soft gating is the final
+  hierarchical layer. See `FINE_GRANULARITY_REFINER_REPORT.md`.
 - **Hierarchical view** — `broad_proportions` (group level),
   `conditional_subtype_proportions` (within a group), `absolute_subtype_proportions`
   (broad × conditional), and `unresolved_family_mass` (kept at the broad level).
@@ -154,3 +210,69 @@ augmentation if subtype resolution is required.
 - **Citing/interpreting:** report bulk values as RNA-derived mRNA proportions
   and spatial values as spot-level RNA-derived composition; read poorly
   separable / high-spillover types at the family level (see above).
+
+## Hierarchical (broad → fine) outputs
+
+When run with `--resolution-mode hierarchical`, TissueResolve writes a
+`hierarchical/` directory alongside the standard outputs.
+
+| File | Meaning |
+|---|---|
+| `*_family_proportions.tsv` (a.k.a. `*_broad_proportions.tsv`) | Broad cell-type-family composition. Rows sum to 1. |
+| `*_conditional_fine_proportions.tsv` | Within-family subtype proportions `P(subtype \| family)`; member columns sum to 1 within each family. |
+| `*_hierarchical_fine_proportions.tsv` | Final absolute subtype proportions for **resolved** families only (unresolved families are 0). |
+| `*_hierarchical_combined_proportions.tsv` | Resolved subtypes **plus** `unresolved_<family>` columns; rows sum to 1. |
+| `*_unresolved_family_mass.tsv` | Family mass that was **not** split into subtypes because the subtypes were not separable. |
+| `*_hierarchical_qc.tsv` | Per-family within-family separability, discriminating-gene count, spillover, and the resolve/unresolved decision. |
+| `cell_type_hierarchy.tsv` | The fine → broad mapping used. |
+| `cell_type_color_map.tsv` / `color_map.json` | Reproducible family-aware colour map. |
+
+### How to read it
+
+- A **resolved** subtype value is a subtype-level estimate.
+- An `unresolved_<family>` value is a **family-level** estimate only — the
+  subtypes within that family could not be reliably separated in your data.
+  Do **not** report it as a confident subtype fraction.
+- Total mass is preserved per sample/spot: resolved subtypes + unresolved mass
+  sum to 1.
+- The `hierarchical_qc.tsv` `reason` column states *why* a family was kept
+  unresolved (low mean separability, too few discriminating genes, or high
+  within-family spillover).
+
+### Colour consistency
+
+The same cell type keeps the same colour across every figure in a run. In
+hierarchical mode each broad family is assigned a distinct base colour, and its
+fine subtypes use related shades of that colour; `Other`, `unresolved_*`, and
+low-confidence categories use neutral grey. The mapping is saved to
+`cell_type_color_map.tsv` (columns: `broad_cell_type`, `fine_cell_type`,
+`color_hex`, `display_label`, `palette_source`, `color_role`). Re-running the
+report from the same outputs reproduces identical colours.
+
+## Main report vs technical appendix (v0.1)
+
+The report is split into two files:
+
+- **`report.html`** — the concise report you read first. It is **QC-first**:
+  assess the reference and signature quality, input compatibility, and the
+  *trusted resolution level* **before** reading predictions. Broad-level results
+  come before fine-level results, and fine-level results are flagged cautious
+  when separability is low. Bulk and spatial benchmarks are shown **separately**.
+- **`technical_appendix.html`** — full separability/spillover heatmaps, spillover
+  networks, spot pies, the large signature heatmap, and the complete source-data
+  listing. The main report links here; this file links back.
+
+How to read it:
+
+1. **Reference & signature QC first.** If reference suitability is WARNING/FAIL
+   or separability is low, interpret predictions cautiously and prefer
+   family-level results.
+2. **Broad before fine.** Trust broad families; trust a fine subtype only when
+   the resolution summary marks its family resolvable. `unresolved_<family>`
+   mass is the honest "we cannot split this further" result — not a missing value.
+3. **Spatial benchmark is not accuracy.** Real Visium has no spot-level ground
+   truth, so the spatial benchmark reports concordance / spatial structure /
+   runtime, never accuracy (accuracy appears only for synthetic spatial truth).
+4. **Where the full data live.** Every figure writes a `.data.tsv`; the figure
+   manifest (`figures/figure_manifest.tsv`) maps each figure to its data, and the
+   full table listing is in the technical appendix.

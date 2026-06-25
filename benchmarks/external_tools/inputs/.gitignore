@@ -1,0 +1,8 @@
+# large harmonized input matrices are not committed
+*.h5ad
+*.h5
+*.zarr
+*.mtx
+*.npz
+bulk/*.tsv
+spatial/*.tsv

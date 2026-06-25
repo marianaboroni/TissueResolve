@@ -1,0 +1,7 @@
+# Bulk benchmark configuration
+data_source: toy            # toy | real_breast_cancer
+include_external: true       # MuSiC, Bisque, DWLS, CIBERSORTx-export (skipped if absent)
+n_bootstrap: 0
+metrics: [pearson, spearman, rmse, mae, signed_bias, dominant_acc]
+reference_library_types: [scrna_10x_3p, single_nucleus, mixed]  # synthetic stress tests
+batch_aware_markers: true

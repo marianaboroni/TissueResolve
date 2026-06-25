@@ -29,6 +29,20 @@ spatcar/
 # Real-data validation files
 examples/real_breast_cancer/data/
 examples/real_breast_cancer/outputs/
+
+# Benchmark outputs (never commit generated benchmark results/exports)
+benchmarks/outputs/
+# Harmonized external-tool input matrices (large per-dataset reference/bulk/truth
+# data); the small top-level *_manifest.tsv files remain trackable.
+benchmarks/external_tools/inputs/gold_truth_bulk/*/
+benchmarks/external_tools/inputs/bulk/
+benchmarks/external_tools/inputs/spatial/
+# External-tool environments + R libraries and run/install logs (never commit;
+# these are large local installs, not source).
+benchmarks/envs/Rlib/
+benchmarks/envs/r_lib/
+benchmarks/envs/c2l_py39/
+benchmarks/logs/
 *.h5ad
 *.h5
 *.loom
@@ -41,3 +55,6 @@ __pycache__/
 demo_demo/
 demo_wiz/
 data/
+benchmarks/envs/c2l_venv/
+examples/second_tissue_crc/data/
+examples/second_tissue_lung/data/

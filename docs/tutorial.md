@@ -99,11 +99,22 @@ tissueresolve report --modality bulk --results-dir results/bulk
 
 ### What this produces
 
-- `results/bulk/tables/`
-- `results/bulk/figures/`
-- `results/bulk/report.html`
-- `results/bulk/run_metadata.json`
+The `run` step writes the analysis bundle:
+
 - `results/bulk/analysis_plan.json`
+- `results/bulk/run_metadata.json`
+- `results/bulk/deconv/` — `proportions.tsv` (predictions), gene panel, reconstruction QC
+- `results/bulk/qc/` — QC metrics, recommendations
+- `results/bulk/methods.txt` — auto-generated methods text
+- `results/bulk/warnings.json` — surfaced warnings
+- `results/bulk/figures/` — interpretive figures (PNG/PDF/SVG + `.data.tsv`)
+- `results/bulk/report.html` — figure-driven report generated from the run result
+
+`run` renders a figure-driven `report.html` from the in-memory result (the
+`figures/` plots embedded). You can also (re)generate a report from a results
+directory with the `tissueresolve report` step (next). The full publication
+report with the complete diagnostic figure set comes from the validation
+harness.
 
 ## 7. Spatial analysis step-by-step
 
@@ -129,6 +140,36 @@ tissueresolve spatial run --visium visium.h5ad \
 tissueresolve report --modality spatial --results-dir results/spatial
 ```
 
+## 7b. Analysing both bulk and spatial (separate runs, one reference)
+
+A single `tissueresolve run` processes **one** modality. To analyse bulk and
+spatial with the same reference, run them into **separate output directories**:
+
+```bash
+tissueresolve run --reference ref.h5ad --query bulk.tsv \
+  --out results/bulk --mode bulk
+tissueresolve run --reference ref.h5ad --query visium.h5ad \
+  --out results/spatial --mode spatial
+```
+
+Do **not** write both to the same `--out` — the second run would overwrite the
+first, so a cross-modality write into a non-empty run directory is **refused**
+unless you pass `--force` (an intentional overwrite). Same-modality re-runs into
+the same directory are allowed (they refresh it).
+
+Merge the two runs into a single report (no re-running of deconvolution):
+
+```bash
+tissueresolve combine-report \
+  --bulk-dir results/bulk --spatial-dir results/spatial \
+  --out results/combined
+```
+
+This writes `results/combined/report.html` (+ `methods.txt`, `warnings.json`,
+`run_metadata.json`), keeps bulk and spatial sections (and benchmark summaries)
+separate, and states that it summarises two separate runs sharing a reference —
+not a single joint bulk+spatial model.
+
 ## 8. Generating HTML reports
 
 The root report command reads a results directory and writes a self-contained
@@ -148,15 +189,20 @@ The report includes:
 
 ## 9. Understanding output folders
 
-A typical run writes:
+A `tissueresolve run` writes:
 
-- `tables/` — TSV summary tables, QC metrics, and diagnostic reports
-- `figures/` — Plotly figures and static exports
-- `report.html` — publication-style report
+- `analysis_plan.json` — the planned modality, preset, and resolution mode
 - `run_metadata.json` — resolved parameters and provenance
-- `analysis_plan.json` — the planned modality and preset
-- `warnings.json` — warnings raised during the run
-- `methods.txt` — methods text for reports
+- `deconv/` — `proportions.tsv` predictions, gene panel, reconstruction QC
+- `qc/` — QC metrics, recommendations, Moran's I (spatial)
+- `methods.txt` — auto-generated methods text
+- `warnings.json` — surfaced warnings
+- `figures/` — interpretive figures (PNG/PDF/SVG + `.data.tsv` source data)
+- `report.html` — figure-driven report generated from the run result
+
+`report.html` can also be (re)generated from a results directory with
+`tissueresolve report` (above). The validation harness additionally produces the
+full diagnostic figure set, a `tables/` listing and a technical appendix.
 
 ## 10. Understanding figures
 
@@ -231,8 +277,124 @@ python examples/real_breast_cancer/scripts/02_make_pseudobulk.py
 python examples/real_breast_cancer/scripts/03_run_bulk_validation.py
 python examples/real_breast_cancer/scripts/04_run_spatial_validation.py
 python examples/real_breast_cancer/scripts/05_summarize_results.py
+python examples/real_breast_cancer/scripts/09_run_hierarchical_deconvolution.py
 python examples/real_breast_cancer/scripts/07_generate_reports.py
 ```
 
 This harness is designed to keep real-data validation separate from the default
 package workflows.
+
+## 16. Hierarchical (broad → fine) deconvolution
+
+When a reference has many similar fine subtypes (T/NK subsets, macrophage /
+monocyte / DC states, endothelial or epithelial subtypes, pericyte / smooth
+muscle), estimating all of them at once produces many non-separable pairs and
+spillover.  **Hierarchical mode** is a more cautious, BayesPrism-style strategy:
+
+1. estimate **broad cell-type families** first,
+2. estimate **fine subpopulations within each family**,
+3. combine: `fine(subtype) = family(broad) × P(subtype | family)`,
+4. report **unresolved family mass** when a family's subtypes are not separable.
+
+Fine subtype estimates are only trusted when the model has evidence that the
+subtype is distinguishable within its family (sufficient within-family
+separability, enough discriminating genes, and low within-family spillover).
+Otherwise the family's mass stays at the broad level as `unresolved_<family>`.
+
+### Required reference annotations for hierarchical mode
+
+For hierarchical deconvolution, your `.h5ad` reference should contain two
+annotation columns in `adata.obs`:
+
+| Column | Meaning | Example |
+|---|---|---|
+| `broad_cell_type` | major compartment / broad lineage | `T/NK`, `Myeloid`, `Epithelial` |
+| `sub_cell_type` | fine cell type or cell state | `CD8 T cell`, `macrophage`, `luminal epithelial cell` |
+
+Inspect your columns first:
+
+```python
+import anndata as ad
+adata = ad.read_h5ad("reference.h5ad")
+print(adata.obs.columns.tolist())
+print(adata.obs[["broad_cell_type", "sub_cell_type"]].drop_duplicates())
+```
+
+If your reference contains **only** fine labels, provide a mapping file instead:
+
+```text
+fine_cell_type    broad_cell_type
+CD4 T cell        T/NK
+CD8 T cell        T/NK
+macrophage        Myeloid
+monocyte          Myeloid
+luminal epithelial cell    Epithelial
+```
+
+Hierarchical mode never silently infers a hierarchy: if broad/fine columns are
+missing or ambiguous and no mapping file is given, it fails with a clear error
+asking you to set `--broad-cell-type-col` / `--fine-cell-type-col` or provide
+`--cell-type-hierarchy mapping.tsv`.
+
+### Flat vs hierarchical
+
+- **Flat** (`--resolution-mode none`): estimate all fine cell types at once.
+  Best when the fine types are well separated.
+- **Hierarchical** (`--resolution-mode hierarchical`): broad-to-fine with
+  unresolved-mass abstention.  Best when many fine types are similar — it
+  reduces spillover between unrelated compartments and avoids overclaiming
+  subtype fractions.
+
+### Example commands
+
+Bulk, flat (fine-only — request it explicitly):
+
+```bash
+tissueresolve run --mode bulk \
+  --reference reference.h5ad --query bulk_counts.tsv \
+  --resolution-mode flat \
+  --out results/bulk_flat
+```
+
+> `tissueresolve bulk run` is an unimplemented stub; use `tissueresolve run
+> --mode bulk` for bulk deconvolution.
+
+Bulk, hierarchical:
+
+```bash
+tissueresolve run --mode bulk \
+  --reference reference.h5ad --query bulk_counts.tsv \
+  --broad-cell-type-col broad_cell_type --fine-cell-type-col sub_cell_type \
+  --resolution-mode hierarchical --preset publication \
+  --out results/bulk_hierarchical
+```
+
+Spatial, hierarchical:
+
+```bash
+tissueresolve run --mode spatial \
+  --reference reference.h5ad --query visium.h5ad \
+  --broad-cell-type-col broad_cell_type --fine-cell-type-col sub_cell_type \
+  --resolution-mode hierarchical --preset publication \
+  --out results/spatial_hierarchical
+```
+
+### Interpreting the outputs
+
+- `*_family_proportions.tsv` — broad family composition (rows sum to 1).
+- `*_conditional_fine_proportions.tsv` — `P(subtype | family)` (sums to 1 per
+  family).
+- `*_hierarchical_fine_proportions.tsv` — resolved subtypes (unresolved
+  families are 0 here).
+- `*_unresolved_family_mass.tsv` — mass kept at the family level.
+- `*_hierarchical_qc.tsv` — per-family resolvability and the decision.
+
+Read a **resolved** subtype as a subtype-level estimate, and an
+`unresolved_<family>` column as a family-level estimate only — its subtypes
+could not be separated in your data and should not be reported as confident
+fractions.
+
+Colours are consistent across all figures of a run: each broad family gets a
+distinct base colour and its fine subtypes use related shades.  The mapping is
+saved to `cell_type_color_map.tsv` (and `color_map.json`) so figures are
+reproducible and customisable later.

@@ -35,6 +35,9 @@ __all__ = [
     "BootstrapConfig",
     "BulkQCConfig",
     "SpatialQCConfig",
+    "HierarchicalConfig",
+    "StateRegularizationConfig",
+    "StateRegularizedSolverConfig",
 ]
 
 
@@ -134,15 +137,27 @@ class DiscordanceConfig:
 
 @dataclass
 class BulkSolverConfig:
-    """Weighted NNLS solver settings for bulk deconvolution.
+    """Bulk deconvolution solver settings.
 
     Attributes
     ----------
     seed:
-        Random seed (passed to bootstrap; the solver itself is deterministic).
+        Random seed (passed to bootstrap; the wNNLS solver itself is deterministic).
+    method:
+        ``"wNNLS"`` (DEFAULT — weighted NNLS, unchanged), or the experimental,
+        opt-in count-likelihood solvers ``"poisson_glm_experimental"`` /
+        ``"nb_glm_experimental"`` (see ``experimental/nb_bulk_solver.py``). The
+        experimental solvers return the same ``BulkDeconvResult`` schema; outputs
+        remain RNA-derived (mRNA) proportions.
+    max_iter, tol:
+        Iteration budget / convergence tolerance for the experimental GLM solver
+        (ignored by wNNLS).
     """
 
     seed: int = 42
+    method: str = "wNNLS"
+    max_iter: int = 500
+    tol: float = 1e-6
 
 
 @dataclass
@@ -178,6 +193,122 @@ class SpatialSolverConfig:
     update_mismatch_every: int = 5
     n_jobs: int = 1
     random_state: int = 42
+    # Experimental in-solver edge-aware smoothing (opt-in; default off = unchanged
+    # behaviour). When True the pipeline builds an edge-weighted spot graph so the
+    # CAR penalty smooths less across likely tissue boundaries.
+    edge_aware: bool = False
+    edge_aware_k_neighbors: int = 6
+    edge_aware_expression_weight: float = 1.0
+    edge_aware_composition_weight: float = 0.0
+    edge_aware_min_weight: float = 0.05
+    edge_aware_max_weight: float = 1.0
+
+
+@dataclass
+class StateRegularizationConfig:
+    """Experimental state-similarity / Redeconve-*inspired* regularization.
+
+    Opt-in, non-default, feature-flagged ``experimental``. When ``enabled`` is
+    False (the default) the spatial pipeline behaves exactly as before. When
+    enabled, a **post-fit, within-family, mass-conserving** refinement of the
+    fitted spot×state proportions is applied (no solver change): similar fine
+    states are concentrated (redundancy sharpening) and small within-family mass
+    is shrunk (sparsity), conserving each spot's broad-family mass and leaving
+    ``unresolved_<family>`` columns untouched.
+
+    Inspired by the *concept* of state-aware regularization; NOT a copy of
+    Redeconve and no equivalence is claimed. See
+    ``docs/STATE_SIMILARITY_REGULARIZATION_REPORT.md``.
+
+    Attributes
+    ----------
+    enabled:
+        Master switch. ``False`` → default behaviour, refinement skipped.
+    mode:
+        ``"state_regularized"`` (graph concentration + sparsity),
+        ``"sparsity"`` (sparsity only), or ``"adaptive_resolution"`` (diagnostic
+        grouping only; estimates unchanged).
+    lambda_state:
+        Strength of within-family redundancy concentration (0 disables it).
+    lambda_sparse:
+        Strength of within-family sparsity shrinkage (0 disables it).
+    within_family_only:
+        Restrict the state graph + refinement to same-family states (default;
+        avoids coupling unrelated families).
+    preserve_broad_mass:
+        Conserve each spot's broad-family mass during refinement (default True).
+    similarity_method:
+        ``"correlation"`` (default) or ``"cosine"`` for the state graph.
+    k_states:
+        Max similar neighbours per state in the graph.
+    min_similarity:
+        Drop state-graph edges with similarity at or below this value.
+    group_threshold:
+        Similarity at/above which ``adaptive_resolution`` recommends grouping.
+    experimental:
+        Provenance flag (always True for this module).
+    """
+
+    enabled: bool = False
+    mode: str = "state_regularized"
+    lambda_state: float = 0.01
+    lambda_sparse: float = 0.001
+    within_family_only: bool = True
+    preserve_broad_mass: bool = True
+    similarity_method: str = "correlation"
+    k_states: int = 5
+    min_similarity: float = 0.0
+    group_threshold: float = 0.9
+    experimental: bool = True
+
+
+@dataclass
+class StateRegularizedSolverConfig:
+    """Experimental **in-solver** state-similarity regularization (Option A; opt-in).
+
+    A SEPARATE experimental projected-gradient solver (the production NB-CAR solver
+    is NOT modified). When ``enabled`` is False (default) the spatial pipeline is
+    unchanged. When enabled, the production solver provides a warm start and this
+    optimiser then minimises the joint objective
+    ``recon + lambda_spatial·spatial + lambda_state·state + lambda_sparse·sparsity``.
+
+    Inspired by the *concept* of state-aware regularization; NOT Redeconve, not
+    Redeconve-equivalent, not the default solver. See
+    ``docs/IN_SOLVER_STATE_REGULARIZATION_REPORT.md``.
+
+    Attributes
+    ----------
+    enabled:
+        Master switch (``False`` → production behaviour, solver path skipped).
+    lambda_spatial, lambda_state, lambda_sparse:
+        Coefficients on the spot-smoothing, state-coupling, and negative-entropy
+        sparsity penalties in the joint objective.
+    state_penalty:
+        ``"competition"`` (default; discourages co-assigning similar states in a
+        spot) or ``"laplacian"`` (smooths similar-state abundances across spots).
+    within_family_only:
+        Restrict the state graph to same-family pairs (default).
+    preserve_broad_mass:
+        Conserve per-family mass from the warm start (default False).
+    max_iter, tol:
+        Projected-gradient budget and relative-loss convergence tolerance.
+    optimizer:
+        Only ``"projected_gradient"`` is implemented.
+    experimental:
+        Provenance flag (always True).
+    """
+
+    enabled: bool = False
+    lambda_spatial: float = 0.02
+    lambda_state: float = 0.01
+    lambda_sparse: float = 0.001
+    state_penalty: str = "competition"
+    within_family_only: bool = True
+    preserve_broad_mass: bool = False
+    max_iter: int = 500
+    tol: float = 1e-5
+    optimizer: str = "projected_gradient"
+    experimental: bool = True
 
 
 @dataclass
@@ -273,6 +404,69 @@ class SpatialQCConfig:
     morans_i_warn: float = 0.05
 
 
+@dataclass
+class HierarchicalConfig:
+    """Broad-to-fine (hierarchical) deconvolution settings.
+
+    Hierarchical mode first estimates broad cell-type families, then estimates
+    fine subpopulations *within* each family.  Fine subtype splits are only
+    trusted when the subtypes are demonstrably separable within their family;
+    otherwise the family's mass is reported as ``unresolved_<family>`` rather
+    than split into subtypes for which there is no evidence.
+
+    All thresholds below are **heuristic**.
+
+    Attributes
+    ----------
+    broad_cell_type_col:
+        obs column with broad/compartment labels.  ``"auto"`` → detect from a
+        list of known candidates; ``None`` → not provided.
+    fine_cell_type_col:
+        obs column with fine/subpopulation labels.  ``"auto"`` → detect.
+    allow_unresolved:
+        When True (default), families whose subtypes are not separable keep
+        their mass at the broad level (``unresolved_<family>``); when False,
+        fine splits are always produced (and a warning is emitted).
+    unresolved_threshold:
+        A family is treated as unresolved when its mean within-family
+        separability score (``1 − Bhattacharyya``) is **below** this value.
+    min_discriminating_genes:
+        A family is treated as unresolved when any within-family pair has fewer
+        than this many discriminating genes (|log2FC| > 1).
+    within_family_spillover_threshold:
+        A family is treated as unresolved when its mean within-family spillover
+        (max correlation to a family sibling) is **above** this value.
+    within_family_marker_selection:
+        ``"auto"`` (default), ``"all"`` (use the shared panel), or ``"pairwise"``
+        (augment with pairwise within-family discriminative genes).
+    hierarchy_level:
+        ``"fine"``, ``"family"``, or ``"both"`` (default) — which estimates to
+        emphasise in outputs/reports.  All levels are always saved.
+    """
+
+    broad_cell_type_col: str | None = "auto"
+    fine_cell_type_col: str | None = "auto"
+    allow_unresolved: bool = True
+    unresolved_threshold: float = 0.10
+    min_discriminating_genes: int = 10
+    within_family_spillover_threshold: float = 0.30
+    within_family_marker_selection: str = "auto"
+    hierarchy_level: str = "both"
+    # partial resolution: assign confident subtype mass and keep only the
+    # ambiguous remainder as unresolved_<family> (not all-or-nothing).
+    allow_partial_resolution: bool = True
+    subtype_confidence_threshold: float = 0.10
+    # Gating mode for hierarchical inference (validated on breast + lung benchmarks):
+    #   "soft"    — DEFAULT. Partial confidence-weighted unresolved mass: each
+    #               subtype's mass is multiplied by a calibrated confidence in
+    #               [0,1] and the residual family mass goes to unresolved_<family>.
+    #   "hard"    — LEGACY. Binary threshold gate (confident subtypes keep full
+    #               mass, the rest are zeroed). Over-abstains in collinear families.
+    #   "ungated" — DIAGNOSTIC only. No abstention; not calibrated.
+    hierarchical_gating: str = "soft"
+    gating_version: str = "soft_gating-1.0"
+
+
 # ---------------------------------------------------------------------------
 # Top-level config
 # ---------------------------------------------------------------------------
@@ -295,6 +489,11 @@ class TissueResolveConfig:
     bootstrap: BootstrapConfig = field(default_factory=BootstrapConfig)
     bulk_qc: BulkQCConfig = field(default_factory=BulkQCConfig)
     spatial_qc: SpatialQCConfig = field(default_factory=SpatialQCConfig)
+    hierarchical: HierarchicalConfig = field(default_factory=HierarchicalConfig)
+    state_regularization: StateRegularizationConfig = field(
+        default_factory=StateRegularizationConfig)
+    state_regularized_solver: StateRegularizedSolverConfig = field(
+        default_factory=StateRegularizedSolverConfig)
     output_dir: Path = field(default_factory=lambda: Path("tissueresolve_out"))
     verbose: bool = True
 
@@ -342,6 +541,9 @@ class TissueResolveConfig:
             "bootstrap": BootstrapConfig,
             "bulk_qc": BulkQCConfig,
             "spatial_qc": SpatialQCConfig,
+            "hierarchical": HierarchicalConfig,
+            "state_regularization": StateRegularizationConfig,
+            "state_regularized_solver": StateRegularizedSolverConfig,
         }
         kwargs: dict[str, Any] = {}
         for key, sub_cls in sub_map.items():

@@ -1,5 +1,12 @@
 """
-Section builders for results-directory-driven HTML reports.
+Results-directory section builders (content layer for the canonical report).
+
+These build the ordered ``(title, body_html)`` sections for a results
+directory; the canonical :mod:`tissueresolve.report.orchestration` layer renders
+them through the unified single-page shell.  Data and prose come from
+:mod:`tissueresolve.report.interpretation` + ``assets``.  (Historically this
+fed a separate ``templates.page`` renderer; that page renderer is gone — the
+content here now feeds the unified shell.)
 
 Each builder reads a results directory (tables/ + figures/ + metadata) and
 returns the ordered list of ``(title, html)`` sections for the bulk or spatial

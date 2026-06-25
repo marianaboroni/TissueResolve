@@ -37,13 +37,123 @@ def cli() -> None:
 @click.option("--query", required=True, help="Bulk counts table or Visium .h5ad or folder")
 @click.option("--out", required=True, help="Output directory for analysis bundle")
 @click.option("--mode", type=click.Choice(["auto", "bulk", "spatial"]), default="auto")
+@click.option("--resolution-mode",
+              type=click.Choice(["auto", "hierarchical", "flat", "none", "suggest"]),
+              default="auto", show_default=True,
+              help="auto = use hierarchical broad→fine when broad/fine labels or a "
+                   "mapping are available, else flat (recommended default). "
+                   "hierarchical = force broad→fine (requires labels/mapping). "
+                   "flat/none = fine-only. suggest = flat + family recommendations.")
+@click.option("--broad-cell-type-col", default="auto", show_default=True,
+              help="obs column with broad/compartment labels (hierarchical mode). "
+                   "'auto' detects a known candidate column.")
+@click.option("--fine-cell-type-col", default="auto", show_default=True,
+              help="obs column with fine/subpopulation labels (hierarchical mode). "
+                   "'auto' detects a known candidate column.")
+@click.option("--cell-type-hierarchy", "hierarchy_path", default=None,
+              type=click.Path(exists=True),
+              help="Optional fine→broad mapping TSV (columns: fine_cell_type, broad_cell_type). "
+                   "Use when the reference has only fine labels.")
+@click.option("--allow-unresolved/--no-allow-unresolved", default=True,
+              help="Keep non-separable families at the broad level as unresolved mass.")
+@click.option("--hierarchical-gating",
+              type=click.Choice(["soft", "hard", "ungated"]),
+              default="soft", show_default=True,
+              help="Hierarchical within-family gating (hierarchical mode only). "
+                   "soft = DEFAULT, partial confidence-weighted unresolved mass "
+                   "(validated on breast + lung). hard = LEGACY binary threshold "
+                   "gate (over-abstains in collinear families). ungated = "
+                   "DIAGNOSTIC only (no abstention).")
+@click.option("--state-aware", is_flag=True, default=False,
+              help="EXPERIMENTAL: state-aware broad→cell-type→state hierarchical "
+                   "deconvolution (requires --resolution-mode hierarchical). It is "
+                   "NOT part of the default v0.1 workflow and has not been "
+                   "validated across real datasets. Falls back to a two-level "
+                   "broad→cell-type run when no state labels exist.")
+@click.option("--solver",
+              type=click.Choice(["auto", "nnls", "weighted_nnls", "marker_nnls",
+                                 "ridge_nnls", "ensemble_nnls", "pipeline"]),
+              default="auto", show_default=True,
+              help="Bulk solver backbone. 'auto' picks the best by gene-masking CV; "
+                   "'pipeline' uses the protocol-aware weighted pipeline.")
+@click.option("--bulk-solver",
+              type=click.Choice(["wNNLS", "poisson_glm_experimental", "nb_glm_experimental"]),
+              default="wNNLS", show_default=True,
+              help="Bulk likelihood model. 'wNNLS' (DEFAULT) = weighted NNLS, unchanged. "
+                   "'poisson_glm_experimental' / 'nb_glm_experimental' (experimental, "
+                   "opt-in) use a count-likelihood GLM. Outputs remain mRNA proportions.")
 @click.option("--preset", type=click.Choice(["quick", "standard", "publication", "diagnostic"]), default="standard")
 @click.option("--dry-run", is_flag=True, default=False)
-def run_cli(reference: str, query: str, out: str, mode: str, preset: str, dry_run: bool) -> None:
+@click.option("--force", is_flag=True, default=False,
+              help="Allow writing into an output directory that already holds a "
+                   "run of a DIFFERENT modality (overwrites it).  By default such "
+                   "a cross-modality overwrite is refused.")
+def run_cli(reference: str, query: str, out: str, mode: str, resolution_mode: str,
+            broad_cell_type_col: str, fine_cell_type_col: str,
+            hierarchy_path: str | None, allow_unresolved: bool,
+            hierarchical_gating: str, state_aware: bool,
+            solver: str, bulk_solver: str, preset: str, dry_run: bool, force: bool) -> None:
     """User-friendly top-level run: auto-detect inputs, write analysis plan, optionally run pipelines."""
-    rc = _run_top_level(reference, query, out, mode, preset, dry_run=dry_run)
+    rc = _run_top_level(
+        reference, query, out, mode, preset, resolution_mode,
+        broad_cell_type_col=broad_cell_type_col,
+        fine_cell_type_col=fine_cell_type_col,
+        hierarchy_path=hierarchy_path,
+        allow_unresolved=allow_unresolved,
+        hierarchical_gating=hierarchical_gating,
+        state_aware=state_aware,
+        solver=solver,
+        bulk_solver_method=bulk_solver,
+        dry_run=dry_run,
+        force=force,
+    )
     if rc != 0:
         raise click.ClickException(f"tissueresolve run failed with code {rc}")
+
+
+def _prior_run_modality(outp: Path) -> str | None:
+    """Return the modality (``"bulk"``/``"spatial"``) of a previous run in *outp*,
+    read from ``analysis_plan.json`` or ``run_metadata.json`` — or ``None`` if the
+    directory holds no recognisable prior run."""
+    for name in ("analysis_plan.json", "run_metadata.json"):
+        p = outp / name
+        if not p.exists():
+            continue
+        try:
+            data = json.loads(p.read_text())
+        except Exception:
+            continue
+        mode = data.get("mode")
+        if mode is None and isinstance(data.get("analysis_plan"), dict):
+            mode = data["analysis_plan"].get("mode")
+        if mode in ("bulk", "spatial"):
+            return mode
+    return None
+
+
+def _guard_output_modality(outp: Path, resolved_mode: str, force: bool) -> None:
+    """Refuse to silently overwrite a different-modality run in *outp*.
+
+    One ``tissueresolve run`` processes one modality.  Writing a spatial run on
+    top of a bulk run (or vice-versa) would clobber ``report.html``, ``deconv/``,
+    ``qc/`` and the JSON/methods/warnings files.  Same-modality re-runs are
+    allowed (they intentionally refresh the directory); cross-modality writes
+    require an explicit ``--force``.
+    """
+    prior = _prior_run_modality(outp)
+    if prior is None or prior == resolved_mode or force:
+        return
+    raise click.ClickException(
+        f"Output directory {str(outp)!r} already contains a {prior!r} run, but "
+        f"this is a {resolved_mode!r} run.  One `tissueresolve run` processes a "
+        "single modality, and writing here would overwrite the existing "
+        f"{prior!r} results (report.html, deconv/, qc/, *.json, methods.txt, "
+        "warnings.json).\n"
+        "Use separate output directories, e.g.:\n"
+        "  results/bulk    (--mode bulk)\n"
+        "  results/spatial (--mode spatial)\n"
+        "then combine them with `tissueresolve combine-report`.\n"
+        "Pass --force to intentionally overwrite this directory.")
 
 
 def _run_top_level(
@@ -52,7 +162,18 @@ def _run_top_level(
     out: str,
     mode: str,
     preset: str,
+    resolution_mode: str,
+    *,
+    broad_cell_type_col: str = "auto",
+    fine_cell_type_col: str = "auto",
+    hierarchy_path: str | None = None,
+    allow_unresolved: bool = True,
+    hierarchical_gating: str = "soft",
+    state_aware: bool = False,
+    solver: str = "auto",
+    bulk_solver_method: str = "wNNLS",
     dry_run: bool = False,
+    force: bool = False,
 ) -> int:
     outp = Path(out)
     outp.mkdir(parents=True, exist_ok=True)
@@ -82,20 +203,60 @@ def _run_top_level(
                 "Could not auto-detect query mode; use --mode to specify 'bulk' or 'spatial'."
             )
 
+    # Refuse to silently overwrite a different-modality run in this directory.
+    _guard_output_modality(outp, resolved_mode, force)
+
+    # Resolve the requested resolution mode to a concrete one (auto → hierarchical
+    # when broad/fine labels/mapping are available; else flat-with-caution).
+    requested_resolution_mode = resolution_mode
+    resolution_mode, resolution_reason = _select_resolution_mode(
+        requested_resolution_mode, reference=reference,
+        broad_col=broad_cell_type_col,
+        fine_col=fine_cell_type_col,
+        hierarchy_path=hierarchy_path, preset=preset)
+    print(f"Resolution mode: requested={requested_resolution_mode!r} → "
+          f"using {resolution_mode!r}.")
+    print(f"  reason: {resolution_reason}")
+
     plan = {
         "detected_reference": detected_ref,
         "detected_query": detected_query,
         "mode": resolved_mode,
+        "requested_resolution_mode": requested_resolution_mode,
+        "resolution_mode": resolution_mode,
+        "resolution_mode_reason": resolution_reason,
         "preset": preset,
         "preset_params": preset_params,
         "protocol": proto,
+        "solver": solver,
     }
+    # State-aware is experimental and only meaningful in hierarchical mode.
+    state_aware_effective = bool(state_aware and resolution_mode == "hierarchical")
+    plan["hierarchy_mode"] = ("state_aware" if state_aware_effective
+                              else ("hierarchical" if resolution_mode == "hierarchical"
+                                    else "standard"))
+    plan["state_aware_enabled"] = state_aware_effective
+    plan["state_aware_feature_status"] = "experimental"
+    if state_aware and not state_aware_effective:
+        plan["state_aware_fallback_reason"] = (
+            "--state-aware ignored: requires --resolution-mode hierarchical")
+    if resolution_mode == "hierarchical":
+        plan["hierarchical"] = {
+            "broad_cell_type_col": broad_cell_type_col,
+            "fine_cell_type_col": fine_cell_type_col,
+            "cell_type_hierarchy": hierarchy_path,
+            "allow_unresolved": allow_unresolved,
+            "hierarchical_gating": hierarchical_gating,
+            "state_aware": state_aware_effective,
+        }
     (outp / "analysis_plan.json").write_text(json.dumps(plan, indent=2))
 
     if dry_run:
         _print_summary_table(
             [
                 ("mode", resolved_mode),
+                ("resolution_mode", resolution_mode),
+                ("resolution_reason", resolution_reason),
                 ("preset", preset),
                 ("reference type", detected_ref),
                 ("query type", detected_query),
@@ -106,21 +267,49 @@ def _run_top_level(
         return 0
 
     cfg = _configure_from_preset(preset_params)
+    # Experimental, opt-in bulk likelihood model (default 'wNNLS' = unchanged).
+    if bulk_solver_method and bulk_solver_method != "wNNLS":
+        cfg.bulk_solver.method = bulk_solver_method
+    if resolution_mode == "hierarchical":
+        cfg.hierarchical.broad_cell_type_col = broad_cell_type_col
+        cfg.hierarchical.fine_cell_type_col = fine_cell_type_col
+        cfg.hierarchical.allow_unresolved = allow_unresolved
+        cfg.hierarchical.hierarchical_gating = hierarchical_gating
     if resolved_mode == "bulk":
-        result = _execute_bulk(reference, query, outp, cfg)
+        result = _execute_bulk(
+            reference, query, outp, cfg, resolution_mode=resolution_mode,
+            hierarchy_path=hierarchy_path, solver=solver,
+            state_aware=state_aware_effective)
     else:
-        result = _execute_spatial(reference, query, outp, cfg)
+        result = _execute_spatial(
+            reference, query, outp, cfg, resolution_mode=resolution_mode,
+            hierarchy_path=hierarchy_path)
 
     run_metadata = {
         "tissueresolve_version": __version__,
+        "requested_resolution_mode": requested_resolution_mode,
+        "resolution_mode": resolution_mode,
+        "resolution_mode_reason": resolution_reason,
         "analysis_plan": plan,
         "pipeline_run": result.run_metadata,
     }
+    # surface the selected mode + reason on the result so the report can state it
+    try:
+        result.run_metadata.setdefault("resolution_mode", resolution_mode)
+        result.run_metadata["resolution_mode_reason"] = resolution_reason
+    except Exception:
+        pass
     (outp / "run_metadata.json").write_text(json.dumps(run_metadata, indent=2, default=str))
+
+    # Report bundle: methods.txt, warnings.json, report.html (state-aware uses a
+    # different result shape and writes its own outputs, so skip it here).
+    if not state_aware_effective and hasattr(result, "deconv"):
+        _write_run_report_bundle(result, outp, resolved_mode)
 
     _print_summary_table(
         [
             ("mode", resolved_mode),
+            ("resolution_mode", resolution_mode),
             ("preset", preset),
             ("reference type", detected_ref),
             ("query type", detected_query),
@@ -140,7 +329,153 @@ def _configure_from_preset(preset_params: dict[str, Any]):
     cfg = TissueResolveConfig()
     if preset_params.get("bootstrap"):
         cfg.bootstrap.n_bootstrap = preset_params.get("n_bootstrap", cfg.bootstrap.n_bootstrap)
+    else:
+        # Preset explicitly disables bootstrap — actually turn it off rather than
+        # leaving the config default (200), which would run CIs against intent.
+        cfg.bootstrap.n_bootstrap = 0
+    hp = preset_params.get("hierarchical") or {}
+    for k, v in hp.items():
+        if hasattr(cfg.hierarchical, k):
+            setattr(cfg.hierarchical, k, v)
     return cfg
+
+
+def _detect_hierarchy_availability(reference: str, broad_col: str,
+                                   fine_col: str, hierarchy_path):
+    """Cheaply check whether hierarchical annotations are available.
+
+    Returns ``(available: bool, source: str | None)`` without building the full
+    mapping.  A ``--cell-type-hierarchy`` file always counts; otherwise the
+    reference ``.h5ad`` ``obs`` is inspected (backed) for broad + fine columns.
+    Saved ReferenceSignature directories carry no per-cell annotations, so only
+    the mapping-file route applies to them.
+    """
+    if hierarchy_path:
+        return True, f"mapping file: {hierarchy_path}"
+    path = Path(reference)
+    if path.suffix in {".h5ad", ".h5"}:
+        try:
+            import anndata as ad
+            from tissueresolve.io import validation as v
+
+            obs = ad.read_h5ad(reference, backed="r").obs
+            b = (v.detect_broad_cell_type_col(obs)
+                 if broad_col in (None, "auto") else
+                 (broad_col if broad_col in obs.columns else None))
+            f = (v.detect_fine_cell_type_col(obs, exclude=b)
+                 if fine_col in (None, "auto") else
+                 (fine_col if fine_col in obs.columns else None))
+            if b and f and b != f:
+                return True, f"obs columns broad={b!r}, fine={f!r}"
+        except Exception:
+            return False, None
+    return False, None
+
+
+def _select_resolution_mode(requested: str, *, reference: str, broad_col: str,
+                            fine_col: str, hierarchy_path, preset: str):
+    """Resolve a user-requested resolution mode to a concrete one + a reason.
+
+    ``auto`` (the default) selects **hierarchical** broad→fine when broad/fine
+    annotations or a mapping are available, because that reduces spillover and
+    yields more reliable interpretation.  When they are not available, ``auto``
+    falls back to flat (fine-only) with a caution — or, for the
+    ``publication``/``diagnostic`` presets, stops and asks for broad/fine
+    labels (those presets imply a publication-grade claim).
+
+    Returns ``(resolved_mode, reason)`` where *resolved_mode* is one of
+    ``"hierarchical" | "none" | "suggest"`` (``"flat"`` maps to ``"none"``).
+    """
+    if requested == "flat":
+        return "none", "user explicitly requested flat (fine-only) deconvolution"
+    if requested == "none":
+        return "none", "user requested none (flat, fine-only)"
+    if requested == "suggest":
+        return "suggest", "user requested suggest (flat + family recommendations)"
+    if requested == "hierarchical":
+        return "hierarchical", "user requested hierarchical broad→fine deconvolution"
+
+    # requested == "auto"
+    available, source = _detect_hierarchy_availability(
+        reference, broad_col, fine_col, hierarchy_path)
+    if available:
+        return "hierarchical", (
+            f"auto: hierarchical broad→fine selected because hierarchical "
+            f"annotations are available ({source})")
+    if preset in ("publication", "diagnostic"):
+        raise click.ClickException(
+            "auto resolution-mode with the "
+            f"'{preset}' preset requires broad/fine cell-type annotations for "
+            "publication-grade hierarchical deconvolution, but none were found. "
+            "Add broad/fine columns to the reference (and set "
+            "--broad-cell-type-col / --fine-cell-type-col), provide "
+            "--cell-type-hierarchy mapping.tsv, or pass --resolution-mode flat "
+            "to run fine-only deconvolution explicitly.")
+    return "none", (
+        "auto: no broad/fine annotations or mapping found; falling back to flat "
+        "(fine-only).  Provide broad/fine labels or --cell-type-hierarchy to "
+        "enable the recommended hierarchical broad→fine workflow.")
+
+
+def _resolve_hierarchy_mapping(reference_path: str, ref, cfg, hierarchy_path):
+    """Resolve a fine→broad mapping for hierarchical mode (or fail clearly).
+
+    Resolution order:
+
+    1. ``--cell-type-hierarchy`` mapping file (if provided);
+    2. broad/fine annotation columns in the reference ``.h5ad`` ``obs``;
+    3. otherwise raise an actionable error.
+
+    Returns ``(mapping, source_str)``.
+    """
+    from tissueresolve.reference.hierarchy import (
+        build_cell_type_hierarchy, load_hierarchy_mapping,
+    )
+
+    cell_types = list(ref.cell_types)
+
+    if hierarchy_path:
+        raw = load_hierarchy_mapping(hierarchy_path)
+        mapping = build_cell_type_hierarchy(cell_types, raw)
+        return mapping, f"mapping file: {hierarchy_path}"
+
+    # try broad/fine columns from the source h5ad
+    path = Path(reference_path)
+    if path.suffix in {".h5ad", ".h5"}:
+        try:
+            import anndata as ad
+            from tissueresolve.io import validation as v
+
+            adata = ad.read_h5ad(reference_path, backed="r")
+            obs = adata.obs
+            hcfg = cfg.hierarchical
+            broad_col = (v.detect_broad_cell_type_col(obs)
+                         if hcfg.broad_cell_type_col in (None, "auto")
+                         else hcfg.broad_cell_type_col)
+            fine_col = (v.detect_fine_cell_type_col(obs, exclude=broad_col)
+                        if hcfg.fine_cell_type_col in (None, "auto")
+                        else hcfg.fine_cell_type_col)
+            if broad_col and fine_col:
+                info = v.validate_hierarchical_annotations(
+                    obs.copy(), broad_col, fine_col)
+                click.echo(
+                    f"Detected hierarchical annotations: broad={broad_col!r}, "
+                    f"fine={fine_col!r} ({info['n_broad']} families, "
+                    f"{info['n_fine']} fine types).")
+                mapping = build_cell_type_hierarchy(cell_types, info["mapping"])
+                return mapping, f"obs columns: broad={broad_col}, fine={fine_col}"
+        except (KeyError, ValueError):
+            raise
+        except Exception:
+            pass
+
+    raise click.ClickException(
+        "Hierarchical deconvolution requires broad and fine cell-type "
+        "annotations.  Add two columns to adata.obs (and set "
+        "--broad-cell-type-col / --fine-cell-type-col) or provide "
+        "--cell-type-hierarchy mapping.tsv (columns: fine_cell_type, "
+        "broad_cell_type)."
+    )
 
 
 def _read_counts_table(path: Path):
@@ -168,10 +503,10 @@ def _load_reference_signature(path: Path, cfg, estimate_overdispersion: bool = F
     )
 
 
-def _execute_bulk(reference: str, query: str, outp: Path, cfg):
+def _execute_bulk(reference: str, query: str, outp: Path, cfg, resolution_mode: str,
+                  *, hierarchy_path: str | None = None, solver: str = "auto",
+                  state_aware: bool = False):
     from tissueresolve.api import deconv_bulk
-    import pandas as pd
-    from tissueresolve.io.reference import load_reference_h5ad
 
     ref_path = Path(reference)
     if ref_path.is_dir() and (ref_path / "metadata.json").exists():
@@ -180,15 +515,69 @@ def _execute_bulk(reference: str, query: str, outp: Path, cfg):
     else:
         ref = _load_reference_signature(ref_path, cfg, estimate_overdispersion=False)
 
+    hierarchy_mapping = None
+    if resolution_mode == "hierarchical":
+        hierarchy_mapping, source = _resolve_hierarchy_mapping(
+            reference, ref, cfg, hierarchy_path)
+        click.echo(f"Hierarchy source: {source}")
+
     bulk = _read_counts_table(Path(query))
-    result = deconv_bulk(bulk, ref, config=cfg, n_bootstrap=cfg.bootstrap.n_bootstrap)
+    # solver backbone applies to flat (non-hierarchical) runs; 'pipeline' or
+    # hierarchical mode use the protocol-aware weighted pipeline.
+    solver_arg = None if (solver in (None, "pipeline") or
+                          resolution_mode == "hierarchical") else solver
+    state_aware_eff = bool(state_aware and resolution_mode == "hierarchical")
+    result = deconv_bulk(
+        bulk,
+        ref,
+        config=cfg,
+        resolution_mode=resolution_mode,
+        hierarchy_mapping=hierarchy_mapping,
+        solver=solver_arg,
+        state_aware=state_aware_eff,
+        n_bootstrap=cfg.bootstrap.n_bootstrap,
+    )
+
+    if state_aware_eff:
+        # state-aware returns a StateAwareBulkResult (different shape): write its
+        # own outputs and expose run metadata for the report.
+        from tissueresolve.bulk.state_aware_hierarchical import (
+            write_state_aware_outputs)
+        write_state_aware_outputs(result, outp / "deconvolution")
+        result.run_metadata = getattr(result, "metadata", {})  # for downstream callers
+        return result
 
     result.deconv.save(outp / "deconv")
     result.qc.save(outp / "qc")
+    if resolution_mode == "hierarchical":
+        from tissueresolve.bulk.hierarchical import save_hierarchical_bulk_outputs
+        save_hierarchical_bulk_outputs(result, outp / "hierarchical")
+    result._figures = _generate_run_figures(result, outp, "bulk")
+    _emit_resolution_diagnostics(result, ref, hierarchy_mapping, reference, cfg, outp)
     return result
 
 
-def _execute_spatial(reference: str, query: str, outp: Path, cfg):
+def _generate_run_figures(result, outp: Path, modality: str,
+                          array_row=None, array_col=None) -> list:
+    """Render the standard interpretive figures for a run into ``<out>/figures``.
+
+    Best-effort: if the optional plotting stack is unavailable, a clear note is
+    printed and the run still succeeds (report falls back to tables)."""
+    try:
+        from tissueresolve.api import plot_results
+        figs = plot_results(result, outp / "figures",
+                            array_row=array_row, array_col=array_col)
+        click.echo(f"  wrote {len(figs)} figure(s) to {outp / 'figures'}/")
+        return figs
+    except Exception as exc:  # noqa: BLE001
+        click.echo(f"  note: figures not generated ({exc}); report will use "
+                   "tables only. Install the [report]/[spatial] extras for figures.",
+                   err=True)
+        return []
+
+
+def _execute_spatial(reference: str, query: str, outp: Path, cfg, resolution_mode: str,
+                     *, hierarchy_path: str | None = None):
     from tissueresolve.api import deconv_spatial
     from tissueresolve.io.spatial import load_visium
     from tissueresolve.results import ReferenceSignature
@@ -198,6 +587,12 @@ def _execute_spatial(reference: str, query: str, outp: Path, cfg):
         ref = ReferenceSignature.load(ref_path)
     else:
         ref = _load_reference_signature(ref_path, cfg, estimate_overdispersion=True)
+
+    hierarchy_mapping = None
+    if resolution_mode == "hierarchical":
+        hierarchy_mapping, source = _resolve_hierarchy_mapping(
+            reference, ref, cfg, hierarchy_path)
+        click.echo(f"Hierarchy source: {source}")
 
     visium = load_visium(query, min_counts=0, min_genes=0)
     Y = visium.X
@@ -216,12 +611,113 @@ def _execute_spatial(reference: str, query: str, outp: Path, cfg):
         visium_gene_names,
         spot_ids=spot_ids,
         config=cfg,
+        resolution_mode=resolution_mode,
+        hierarchy_mapping=hierarchy_mapping,
         run_neighbourhood=False,
     )
 
     result.deconv.save(outp / "deconv")
     result.qc.save(outp / "qc")
+    if resolution_mode == "hierarchical":
+        from tissueresolve.spatial.hierarchical import save_hierarchical_spatial_outputs
+        save_hierarchical_spatial_outputs(result, outp / "hierarchical")
+    result._figures = _generate_run_figures(result, outp, "spatial",
+                                            array_row=array_row, array_col=array_col)
+    _emit_resolution_diagnostics(result, ref, hierarchy_mapping, reference, cfg, outp)
     return result
+
+
+def _emit_resolution_diagnostics(result, ref, mapping, reference_path, cfg, outp) -> None:
+    """Best-effort: write adaptive_resolution + reference_uncertainty report tables.
+
+    Reporting/QC only — never changes estimates and never breaks a run. Written
+    under ``<out>/resolution/`` whenever inputs allow (mapping for adaptive
+    resolution; raw reference AnnData for reference uncertainty)."""
+    try:
+        from tissueresolve.report.resolution_diagnostics import (
+            write_resolution_diagnostics, mean_unresolved_by_family)
+        um = None
+        try:
+            props = getattr(getattr(result, "deconv", None), "proportions", None)
+            if props is not None:
+                um = mean_unresolved_by_family(props)
+        except Exception:  # noqa: BLE001
+            um = None
+        write_resolution_diagnostics(
+            outp / "resolution", ref, mapping, reference_path=str(reference_path),
+            cell_type_col=getattr(cfg.reference, "celltype_col", "cell_type"),
+            donor_col=getattr(cfg.reference, "donor_col", "donor"),
+            unresolved_mass=um)
+    except Exception:  # noqa: BLE001 — diagnostics are best-effort
+        pass
+
+
+def _collect_run_warnings(result, modality: str) -> list[dict[str, str]]:
+    """Collect human-readable warnings from a finished run for ``warnings.json``.
+
+    Warnings are surfaced, never hidden (CLAUDE.md rule 2): the estimate-type
+    caveat is always recorded, plus QC recommendations, non-convergence
+    (spatial), and protocol risk when present.
+    """
+    warns: list[dict[str, str]] = []
+    if modality == "bulk":
+        warns.append({"severity": "info", "category": "estimate_type",
+                      "message": "Estimates are RNA-derived mRNA proportions, "
+                                 "not absolute cell fractions."})
+    else:
+        warns.append({"severity": "info", "category": "estimate_type",
+                      "message": "Estimates are spot-level RNA-derived "
+                                 "composition, not single-cell counts."})
+    qc = getattr(result, "qc", None)
+    for rec in (getattr(qc, "recommendations", None) or []):
+        warns.append({"severity": "warning", "category": "qc", "message": str(rec)})
+    deconv = getattr(result, "deconv", None)
+    if modality == "spatial" and deconv is not None and \
+            getattr(deconv, "converged", True) is False:
+        warns.append({"severity": "error", "category": "convergence",
+                      "message": f"Spatial solver did not converge within "
+                                 f"{getattr(deconv, 'n_iter', '?')} iterations."})
+    risk = getattr(result, "protocol_risk", None)
+    if risk is not None and getattr(risk, "risk_level", None) not in (None, "low"):
+        warns.append({"severity": "warning", "category": "protocol_risk",
+                      "message": f"Protocol risk level: "
+                                 f"{getattr(risk, 'risk_level', 'unknown')}."})
+    return warns
+
+
+def _write_run_report_bundle(result, outp: Path, modality: str) -> None:
+    """Write methods.txt, warnings.json and report.html for a finished run.
+
+    Uses the in-memory result (no new figures are rendered): predictions, QC,
+    methods and warnings are populated from the pipeline result.  Failures here
+    never abort a successful deconvolution — they are reported, not hidden.
+    """
+    from tissueresolve.report import methods_text as _mt
+
+    # methods.txt
+    try:
+        methods = (_mt.compose_bulk_methods(result) if modality == "bulk"
+                   else _mt.compose_spatial_methods(result))
+        (outp / "methods.txt").write_text(methods, encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001
+        click.echo(f"  warning: could not write methods.txt: {exc}", err=True)
+
+    # warnings.json
+    try:
+        warns = _collect_run_warnings(result, modality)
+        (outp / "warnings.json").write_text(
+            json.dumps(warns, indent=2), encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001
+        click.echo(f"  warning: could not write warnings.json: {exc}", err=True)
+
+    # report.html (from the in-memory result → populated predictions + QC +
+    # the interpretive figures generated during the run).
+    try:
+        from tissueresolve.report import generate_report
+        figs = getattr(result, "_figures", None) or None
+        generate_report(modality, result, out=outp / "report.html", figures=figs)
+    except Exception as exc:  # noqa: BLE001
+        click.echo(f"  warning: could not generate report.html: {exc}", err=True)
 
 
 def _print_summary_table(rows: list[tuple[str, Any]]) -> None:
@@ -242,8 +738,25 @@ def run(argv: list | None = None) -> int:
     parser.add_argument("--query", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--mode", choices=("auto", "bulk", "spatial"), default="auto")
+    parser.add_argument("--resolution-mode",
+                        choices=("auto", "hierarchical", "flat", "none", "suggest"),
+                        default="auto")
+    parser.add_argument("--broad-cell-type-col", default="auto")
+    parser.add_argument("--fine-cell-type-col", default="auto")
+    parser.add_argument("--cell-type-hierarchy", dest="hierarchy_path", default=None)
+    parser.add_argument("--allow-unresolved", dest="allow_unresolved",
+                        action="store_true", default=True)
+    parser.add_argument("--no-allow-unresolved", dest="allow_unresolved",
+                        action="store_false")
+    parser.add_argument("--hierarchical-gating", dest="hierarchical_gating",
+                        choices=("soft", "hard", "ungated"), default="soft")
+    parser.add_argument("--solver",
+                        choices=("auto", "nnls", "weighted_nnls", "marker_nnls",
+                                 "ridge_nnls", "ensemble_nnls", "pipeline"),
+                        default="auto")
     parser.add_argument("--preset", choices=("quick", "standard", "publication", "diagnostic"), default="standard")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--force", action="store_true", default=False)
     args = parser.parse_args(argv)
 
     return _run_top_level(
@@ -252,7 +765,15 @@ def run(argv: list | None = None) -> int:
         args.out,
         args.mode,
         args.preset,
+        args.resolution_mode,
+        broad_cell_type_col=args.broad_cell_type_col,
+        fine_cell_type_col=args.fine_cell_type_col,
+        hierarchy_path=args.hierarchy_path,
+        allow_unresolved=args.allow_unresolved,
+        hierarchical_gating=args.hierarchical_gating,
+        solver=args.solver,
         dry_run=args.dry_run,
+        force=args.force,
     )
 
 
@@ -359,6 +880,25 @@ def spatial() -> None:
 )
 @click.option("--lambda-spatial", type=float, default=None,
               help="Override CAR spatial regularisation strength λ.")
+@click.option("--spatial-preset",
+              type=click.Choice(["default", "weak_smoothing", "no_smoothing",
+                                 "edge_aware_smoothing", "combined_weak_edge_smoothing",
+                                 "state_regularized_experimental",
+                                 "sparsity_state_regularized_experimental",
+                                 "adaptive_resolution_experimental",
+                                 "state_regularized_solver_experimental",
+                                 "state_regularized_solver_competition",
+                                 "state_regularized_solver_laplacian",
+                                 "state_regularized_solver_weak"]),
+              default="default", show_default=True,
+              help="Experimental spatial smoothing preset. 'default' keeps λ=0.1; "
+                   "'weak_smoothing' (experimental) uses λ=0.02; 'no_smoothing' uses λ=0; "
+                   "'edge_aware_smoothing' (experimental) uses an in-solver edge-weighted "
+                   "graph (λ=0.05); 'combined_weak_edge_smoothing' (experimental) combines "
+                   "λ=0.02 with the edge-weighted graph; the '*_experimental' state presets "
+                   "(experimental) keep λ=0.1 and apply a post-fit within-family "
+                   "state-similarity / sparsity refinement (requires a fine→broad mapping). "
+                   "An explicit --lambda-spatial overrides the preset λ.")
 @click.option("--max-iter", type=int, default=None,
               help="Override maximum solver iterations.")
 @click.option("--random-state", type=int, default=None,
@@ -379,6 +919,7 @@ def spatial_run(
     cell_type_col: str,
     marker_genes_path: str | None,
     lambda_spatial: float | None,
+    spatial_preset: str,
     max_iter: int | None,
     random_state: int | None,
     min_counts: int,
@@ -407,8 +948,20 @@ def spatial_run(
         TissueResolveConfig.from_yaml(config_path)
         if config_path else TissueResolveConfig()
     )
+    # Experimental spatial smoothing preset (default = no-op, λ stays 0.1).
+    from tissueresolve.experimental.spatial_presets import apply_spatial_preset
+    preset_info = apply_spatial_preset(cfg, spatial_preset)
+    if preset_info.experimental:
+        click.echo(f"[experimental] spatial preset '{spatial_preset}' "
+                   f"→ λ_spatial={cfg.spatial_solver.lambda_spatial}")
     if lambda_spatial is not None:
+        # explicit override wins over the preset; re-derive provenance.
         cfg.spatial_solver.lambda_spatial = lambda_spatial
+        preset_info = apply_spatial_preset(cfg, "default")
+        preset_info.preset = f"manual_lambda({lambda_spatial})"
+        preset_info.lambda_spatial = float(lambda_spatial)
+        preset_info.smoothing_used = lambda_spatial > 0.0
+        preset_info.is_default = False
     if max_iter is not None:
         cfg.spatial_solver.max_iter = max_iter
     if random_state is not None:
@@ -459,10 +1012,14 @@ def spatial_run(
     # --- save ---
     result.deconv.save(out / "deconv")
     result.qc.save(out / "qc")
+    _generate_run_figures(result, out, "spatial",
+                          array_row=array_row, array_col=array_col)
 
     import json
+    run_md = dict(result.run_metadata)
+    run_md.update(preset_info.to_metadata())
     with (out / "run_metadata.json").open("w", encoding="utf-8") as fh:
-        json.dump(result.run_metadata, fh, indent=2, default=str)
+        json.dump(run_md, fh, indent=2, default=str)
 
     m = result.deconv
     click.echo(
@@ -605,6 +1162,31 @@ def report(modality: str, results_dir: str, out_path: str | None) -> None:
 
     out = generate_report(modality, results_dir, out_path)
     click.echo(f"Wrote {modality} report -> {out}")
+
+
+@cli.command(name="combine-report")
+@click.option("--bulk-dir", "bulk_dir", required=True, type=click.Path(exists=True),
+              help="An existing `tissueresolve run --mode bulk` output directory.")
+@click.option("--spatial-dir", "spatial_dir", required=True, type=click.Path(exists=True),
+              help="An existing `tissueresolve run --mode spatial` output directory.")
+@click.option("--out", "out_dir", required=True, type=click.Path(file_okay=False),
+              help="Output directory for the combined report bundle.")
+def combine_report(bulk_dir: str, spatial_dir: str, out_dir: str) -> None:
+    """Combine an existing bulk run and an existing spatial run into one report.
+
+    Reads the two run directories (it does NOT re-run deconvolution) and writes
+    ``report.html`` + ``methods.txt`` + ``warnings.json`` + ``run_metadata.json``
+    under ``--out``.  Bulk and spatial sections (and benchmark summaries) are kept
+    separate; the report states it summarises two separate runs sharing a
+    reference, not a single joint model.
+    """
+    from tissueresolve.report.combined import generate_combined_report
+
+    try:
+        out = generate_combined_report(bulk_dir, spatial_dir, out_dir)
+    except ValueError as exc:
+        raise click.ClickException(str(exc))
+    click.echo(f"Wrote combined report -> {out}")
 
 
 # ---------------------------------------------------------------------------

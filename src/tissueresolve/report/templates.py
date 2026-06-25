@@ -1,5 +1,10 @@
 """
-HTML templates and reusable fragments for TissueResolve reports.
+HTML fragment helpers for results-directory report content.
+
+Used by :mod:`tissueresolve.report.sections` (df tables, figure blocks, key
+findings, severity warning boxes) to build section bodies that the canonical
+orchestration/unified shell then renders.  ``templates.page`` is also still used
+by the real-data harness's combined validation report.
 
 Plain f-string / string building with embedded CSS — no Jinja2 required (it is
 an optional convenience only).  Figures are embedded as ``<iframe>`` references

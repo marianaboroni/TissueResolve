@@ -1,0 +1,118 @@
+{
+  "frozen_at": "2026-06-09 (baseline freeze for v2 development)",
+  "git_commit": "d15a3da66da9a65c42097157b1844e164cb4e29c",
+  "git_branch": "benchmark-report-refactor",
+  "git_status_dirty": true,
+  "python": "3.9.6",
+  "platform": "macOS-26.3.1-arm64-arm-64bit",
+  "package_versions": {
+    "numpy": "1.26.4",
+    "pandas": "2.3.3",
+    "scipy": "1.13.1",
+    "scikit-learn": "not-installed",
+    "anndata": "0.10.9",
+    "tissueresolve": "0.1.0",
+    "matplotlib": "3.9.4"
+  },
+  "external_methods": {
+    "MuSiC": "1.0.0 (R, isolated r_lib)",
+    "BisqueRNA": "1.0.5 (R)",
+    "RCTD/spacexr": "2.2.1 (R)",
+    "cell2location": "0.1.4 (py3.9 c2l_py39, CPU)",
+    "BayesPrism": "FAILED (C++ toolchain)",
+    "CARD": "FAILED (C++ toolchain)"
+  },
+  "seeds": {
+    "bulk_donor_splits": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "bulk_scenario_offsets": "10+i*100+s*1000",
+    "spatial_seeds": [
+      0,
+      1,
+      2,
+      3,
+      4
+    ],
+    "bootstrap_seed": 0
+  },
+  "datasets": {
+    "reference": "breast_cancer_sc_reference.h5ad (41 donors, 30k cells, 5000 genes)",
+    "bulk_truth": "held-out-donor count-level pseudobulk (mRNA-proportion)",
+    "spatial_synthetic": "structured grids from query-donor cells",
+    "spatial_real": "10x Visium V1_Breast_Cancer_Block_A (500/3798 spots, no GT)",
+    "tcga": "TCGA-BRCA TNBC bulk (40 samples, no GT)"
+  },
+  "donor_split_seed0": {
+    "reference_donors": [
+      "P02",
+      "P03",
+      "P04",
+      "P05",
+      "P113",
+      "P114",
+      "P122",
+      "P124",
+      "P21",
+      "P22",
+      "P25",
+      "P26",
+      "P28",
+      "P29",
+      "P31",
+      "P35",
+      "P37",
+      "P42",
+      "P71",
+      "P76"
+    ],
+    "query_donors": [
+      "P01",
+      "P06",
+      "P07",
+      "P08",
+      "P10",
+      "P11",
+      "P115",
+      "P116",
+      "P117",
+      "P119",
+      "P120",
+      "P133",
+      "P23",
+      "P27",
+      "P32",
+      "P33",
+      "P34",
+      "P36",
+      "P43",
+      "P75",
+      "P79"
+    ]
+  },
+  "default_method_params": {
+    "bulk_default_solver": "auto (data-dependent; nnls/ridge via gene-masking CV)",
+    "hierarchical_gate": {
+      "allow_unresolved": true,
+      "unresolved_threshold": 0.1,
+      "min_discriminating_genes": 10,
+      "within_family_spillover_threshold": 0.3,
+      "allow_partial_resolution": true,
+      "subtype_confidence_threshold": 0.1
+    },
+    "spatial_lambda_spatial_default": 0.1,
+    "min_cells_per_type": 30
+  },
+  "frozen_baseline_tables": [
+    "holdout_bulk_multisplit/metrics_ci.tsv",
+    "holdout_bulk/multisplit_combined/metrics_ci.tsv",
+    "spatial_multiseed/metrics_ci.tsv",
+    "spatial_real_visium/spatial_real_metrics_all.tsv",
+    "tcga_method_complexity_summary.tsv"
+  ],
+  "note": "BASELINE FROZEN. v2 experimental methods are compared against these tables and must pass all promotion gates before any default changes (rules 3,4)."
+}

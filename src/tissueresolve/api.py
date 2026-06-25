@@ -30,32 +30,308 @@ __all__ = [
 ]
 
 
-def deconv_bulk(bulk, ref, *, config=None, **kwargs):
+def _solver_bulk_result(bulk, ref, solver: str, cfg):
+    """Run a chosen solver backbone (``nnls``/``ridge_nnls``/``auto``/…) and wrap
+    the flat estimate in a ``BulkPipelineResult``-compatible object.
+
+    This is the ``--solver`` path; it is additive and only used when a solver is
+    explicitly requested.  The default ``deconv_bulk`` path (protocol-aware
+    weighted pipeline) is unchanged."""
+    import numpy as np
+    from tissueresolve.solver import get_solver
+    from tissueresolve.bulk.pipeline import BulkPipelineResult
+    from tissueresolve.results import BulkDeconvResult, QCReport
+
+    res = get_solver(solver, n_splits=2).solve(bulk, ref) if solver in ("auto", "ensemble_nnls") \
+        else get_solver(solver).solve(bulk, ref)
+    props = res.proportions
+    sub = ref.subset_genes(res.genes_used)
+    R = sub.as_R_cpm()                       # K × g
+    cols = [c for c in props.columns if c in set(sub.cell_types)]
+    idx = [list(sub.cell_types).index(c) for c in cols]
+    recon = props[cols].to_numpy(float) @ R[idx]   # samples × g
+    bsub = bulk.copy(); bsub.index = bsub.index.map(str)
+    obs = bsub.loc[list(sub.gene_names)].to_numpy(float).T  # samples × g
+    r2 = []
+    for i in range(obs.shape[0]):
+        o, p = obs[i], recon[i]
+        ss_res = float(np.sum((o - p) ** 2)); ss_tot = float(np.sum((o - o.mean()) ** 2))
+        r2.append(1.0 - ss_res / ss_tot if ss_tot > 0 else float("nan"))
+    import pandas as pd
+    deconv = BulkDeconvResult(
+        proportions=props, coverage_r2=pd.Series(r2, index=props.index),
+        gene_panel=list(res.genes_used),
+        run_metadata={"solver": solver, **res.diagnostics, "resolution_mode": "flat"})
+    qc = QCReport(modality="bulk",
+                  recommendations=[f"solver={solver}: "
+                                   f"{res.diagnostics.get('selection_reason', '')}".strip()])
+    return BulkPipelineResult(deconv=deconv, qc=qc, gene_selection=None,
+                              protocol_risk=None,
+                              run_metadata={"solver": solver, **res.diagnostics})
+
+
+def deconv_bulk(
+    bulk, ref, *, config=None, resolution_mode: Optional[str] = None,
+    hierarchy_mapping: Optional[dict] = None, solver: Optional[str] = None,
+    state_aware: bool = False, reference_adata=None,
+    state_to_celltype: Optional[dict] = None,
+    broad_col: Optional[str] = None, cell_type_col: Optional[str] = None,
+    state_col: Optional[str] = None,
+    **kwargs,
+):
     """Run the bulk deconvolution pipeline.  Returns ``BulkPipelineResult``.
 
     Wrapper over :meth:`BulkPipeline.run`; extra keyword arguments
     (``gene_panel``, ``n_bootstrap``, ``protocol_meta``, ``mrna_corrector`` …)
     are forwarded verbatim.
+
+    Parameters
+    ----------
+    resolution_mode:
+        ``"none"`` or ``"suggest"`` for flat results, ``"auto"`` to merge
+        non-separable types before deconvolution, or ``"hierarchical"`` to run
+        broad-family deconvolution first then refine via within-family subtype
+        estimates (returning a
+        :class:`~tissueresolve.bulk.hierarchical.HierarchicalBulkResult`).
+    hierarchy_mapping:
+        For ``"hierarchical"`` mode, an explicit ``{fine_cell_type:
+        broad_family}`` mapping.  When ``None``, families are inferred from the
+        cell-type labels (a warning is emitted) — providing explicit broad/fine
+        annotations or a mapping file is strongly preferred.
     """
+    from tissueresolve.config import TissueResolveConfig
     from tissueresolve.bulk.pipeline import BulkPipeline
 
-    return BulkPipeline(config).run(bulk, ref, **kwargs)
+    import warnings as _warnings
+
+    cfg = config or TissueResolveConfig()
+    # Explicit solver backbone (additive): only when requested.  Hierarchical +
+    # solver combination is not yet wired, so a solver implies a flat estimate.
+    if solver is not None and resolution_mode in (None, "flat", "none", "auto"):
+        return _solver_bulk_result(bulk, ref, solver, cfg)
+    if hasattr(cfg, "resolution") and resolution_mode is None:
+        resolution_mode = getattr(cfg.resolution, "resolution_mode", None)
+    resolution_mode = resolution_mode or "auto"
+    if resolution_mode == "flat":
+        resolution_mode = "none"
+    if resolution_mode not in ("none", "suggest", "auto", "hierarchical"):
+        raise ValueError(
+            "resolution_mode must be one of: auto, hierarchical, flat, none, suggest"
+        )
+
+    # auto: prefer hierarchical broad→fine when a hierarchy mapping is available,
+    # otherwise fall back to flat (fine-only) with a caution.
+    if resolution_mode == "auto":
+        if hierarchy_mapping is not None:
+            resolution_mode = "hierarchical"
+        else:
+            _warnings.warn(
+                "deconv_bulk(resolution_mode='auto'): no hierarchy_mapping was "
+                "provided, so flat (fine-only) deconvolution is used.  Provide a "
+                "fine→broad mapping to enable the recommended hierarchical "
+                "broad→fine workflow.", stacklevel=2)
+            result = BulkPipeline(cfg).run(bulk, ref, **kwargs)
+            result.deconv.run_metadata["resolution_mode"] = "none"
+            result.deconv.run_metadata["resolution_mode_requested"] = "auto"
+            return result
+
+    if resolution_mode in ("none", "suggest"):
+        result = BulkPipeline(cfg).run(bulk, ref, **kwargs)
+        result.deconv.run_metadata["resolution_mode"] = resolution_mode
+        return result
+
+    # ---- hierarchical mode ----
+    from tissueresolve.bulk.hierarchical import run_hierarchical_bulk
+    from tissueresolve.reference.hierarchy import build_cell_type_hierarchy
+
+    hcfg = getattr(cfg, "hierarchical", None)
+    gate = dict(
+        allow_unresolved=getattr(hcfg, "allow_unresolved", True),
+        unresolved_threshold=getattr(hcfg, "unresolved_threshold", 0.10),
+        min_discriminating_genes=getattr(hcfg, "min_discriminating_genes", 10),
+        within_family_spillover_threshold=getattr(
+            hcfg, "within_family_spillover_threshold", 0.30),
+        allow_partial_resolution=getattr(hcfg, "allow_partial_resolution", True),
+        subtype_confidence_threshold=getattr(hcfg, "subtype_confidence_threshold", 0.10),
+        # Soft gating is the default hierarchical mode. Configs that predate this
+        # field (no `hierarchical_gating`) fall back to "soft" but the run
+        # metadata records the resolved mode (see assemble_hierarchical_estimates).
+        hierarchical_gating=getattr(hcfg, "hierarchical_gating", "soft"),
+        gating_version=getattr(hcfg, "gating_version", "soft_gating-1.0"),
+    )
+    # Explicit gating kwargs override the cfg-derived defaults (avoids a
+    # duplicate-keyword collision when callers pass e.g. min_discriminating_genes).
+    for _k in list(kwargs):
+        if _k in gate:
+            gate[_k] = kwargs.pop(_k)
+
+    # ---- experimental state-aware (broad → cell type → state) mode ----
+    # Routed BEFORE building the fine→broad mapping: with state labels the
+    # reference's cell_types are *states*, so the cell_type→broad mapping comes
+    # from the raw hierarchy_mapping, not from build_cell_type_hierarchy(states).
+    if state_aware:
+        return _run_state_aware_bulk(
+            bulk, ref, hierarchy_mapping, cfg, gate,
+            reference_adata=reference_adata, state_to_celltype=state_to_celltype,
+            broad_col=broad_col, cell_type_col=cell_type_col, state_col=state_col,
+            **kwargs)
+
+    mapping = build_cell_type_hierarchy(list(ref.cell_types), hierarchy_mapping)
+    return run_hierarchical_bulk(bulk, ref, mapping, config=cfg, **gate, **kwargs)
+
+
+def _run_state_aware_bulk(bulk, ref, hierarchy_mapping, cfg, gate, *,
+                          reference_adata=None, state_to_celltype=None,
+                          broad_col=None, cell_type_col=None, state_col=None,
+                          **kwargs):
+    """Route to the experimental state-aware 3-level solver (default off).
+
+    When state labels exist, the ``cell_type → broad`` mapping is the raw
+    *hierarchy_mapping* (the reference's ``cell_types`` are then *states*, so the
+    broad mapping cannot be derived from them).  When no state labels exist, runs
+    a two-level fallback (broad → cell type) built from the reference cell types
+    and records ``fallback_reason``.  Granular gene panels are built only when a
+    ``reference_adata`` (per-cell) is provided.
+    """
+    import warnings as _warnings
+    from tissueresolve.bulk.state_aware_hierarchical import (
+        run_state_aware_hierarchical_bulk)
+    from tissueresolve.reference.hierarchy import build_cell_type_hierarchy
+    from tissueresolve.reference.three_level_hierarchy import (
+        build_three_level_hierarchy, build_three_level_from_two_level)
+
+    fallback_reason = None
+    if state_to_celltype:
+        if not hierarchy_mapping:
+            raise ValueError(
+                "state_aware=True with state_to_celltype requires a "
+                "hierarchy_mapping (cell_type→broad).")
+        hierarchy = build_three_level_hierarchy(state_to_celltype,
+                                                dict(hierarchy_mapping))
+    else:
+        mapping = build_cell_type_hierarchy(list(ref.cell_types), hierarchy_mapping)
+        hierarchy = build_three_level_from_two_level(mapping)
+        fallback_reason = ("no state labels available; running broad→cell_type "
+                           "two-level fallback (no third-level states)")
+        _warnings.warn("deconv_bulk(state_aware=True): " + fallback_reason,
+                       stacklevel=2)
+
+    celltype_panels = state_panels = None
+    panel_source = "global_genes"
+    if reference_adata is not None and broad_col and cell_type_col:
+        from tissueresolve.reference.granular_signatures import (
+            build_multigranularity_panels)
+        with _warnings.catch_warnings():
+            _warnings.simplefilter("ignore")
+            panels = build_multigranularity_panels(
+                reference_adata, broad_col, cell_type_col, state_col)
+        celltype_panels = panels["celltype_panels"].family_panels
+        state_panels = (panels["state_panels"].family_panels
+                        if panels["state_panels"] is not None else None)
+        panel_source = "granular_within_family"
+
+    result = run_state_aware_hierarchical_bulk(
+        bulk, ref, hierarchy, config=cfg,
+        celltype_panels=celltype_panels, state_panels=state_panels, **gate, **kwargs)
+    result.metadata.update({
+        "hierarchy_mode": "state_aware",
+        "state_aware_enabled": True,
+        "feature_status": "experimental",
+        "broad_col": broad_col, "cell_type_col": cell_type_col,
+        "state_col": state_col,
+        "has_states": hierarchy.has_states,
+        "panel_source": panel_source,
+        "fallback_reason": fallback_reason,
+    })
+    return result
 
 
 def deconv_spatial(
     Y, ref, array_row, array_col, lib_sizes, gene_names,
-    spot_ids=None, *, config=None, **kwargs,
+    spot_ids=None, *, config=None, resolution_mode: Optional[str] = None,
+    hierarchy_mapping: Optional[dict] = None, **kwargs,
 ):
     """Run the spatial deconvolution pipeline.  Returns ``SpatialPipelineResult``.
 
     Wrapper over :meth:`SpatialPipeline.run`; extra keyword arguments
     (``marker_genes``, ``run_neighbourhood`` …) are forwarded verbatim.
+
+    Parameters
+    ----------
+    resolution_mode:
+        ``"none"`` or ``"suggest"`` for flat results, ``"auto"`` to merge
+        non-separable types before deconvolution, or ``"hierarchical"`` to run
+        broad-family deconvolution first then refine via within-family subtype
+        estimates (returning a
+        :class:`~tissueresolve.spatial.hierarchical.HierarchicalSpatialResult`).
+    hierarchy_mapping:
+        For ``"hierarchical"`` mode, an explicit ``{fine_cell_type:
+        broad_family}`` mapping.  When ``None``, families are inferred from the
+        labels (a warning is emitted).
     """
+    from tissueresolve.config import TissueResolveConfig
     from tissueresolve.spatial.pipeline import SpatialPipeline
 
-    return SpatialPipeline(config).run(
-        Y, ref, array_row, array_col, lib_sizes, gene_names, spot_ids, **kwargs
+    import warnings as _warnings
+
+    cfg = config or TissueResolveConfig()
+    if hasattr(cfg, "resolution") and resolution_mode is None:
+        resolution_mode = getattr(cfg.resolution, "resolution_mode", None)
+    resolution_mode = resolution_mode or "auto"
+    if resolution_mode == "flat":
+        resolution_mode = "none"
+    if resolution_mode not in ("none", "suggest", "auto", "hierarchical"):
+        raise ValueError(
+            "resolution_mode must be one of: auto, hierarchical, flat, none, suggest"
+        )
+
+    if resolution_mode == "auto":
+        if hierarchy_mapping is not None:
+            resolution_mode = "hierarchical"
+        else:
+            _warnings.warn(
+                "deconv_spatial(resolution_mode='auto'): no hierarchy_mapping was "
+                "provided, so flat (fine-only) deconvolution is used.  Provide a "
+                "fine→broad mapping to enable the recommended hierarchical "
+                "broad→fine workflow.", stacklevel=2)
+            result = SpatialPipeline(cfg).run(
+                Y, ref, array_row, array_col, lib_sizes, gene_names, spot_ids,
+                **kwargs)
+            result.deconv.run_metadata["resolution_mode"] = "none"
+            result.deconv.run_metadata["resolution_mode_requested"] = "auto"
+            return result
+
+    if resolution_mode in ("none", "suggest"):
+        result = SpatialPipeline(cfg).run(
+            Y, ref, array_row, array_col, lib_sizes, gene_names, spot_ids, **kwargs
+        )
+        result.deconv.run_metadata["resolution_mode"] = resolution_mode
+        return result
+
+    # ---- hierarchical mode ----
+    from tissueresolve.spatial.hierarchical import run_hierarchical_spatial
+    from tissueresolve.reference.hierarchy import build_cell_type_hierarchy
+
+    mapping = build_cell_type_hierarchy(list(ref.cell_types), hierarchy_mapping)
+    hcfg = getattr(cfg, "hierarchical", None)
+    gate = dict(
+        allow_unresolved=getattr(hcfg, "allow_unresolved", True),
+        unresolved_threshold=getattr(hcfg, "unresolved_threshold", 0.10),
+        min_discriminating_genes=getattr(hcfg, "min_discriminating_genes", 10),
+        within_family_spillover_threshold=getattr(
+            hcfg, "within_family_spillover_threshold", 0.30),
+        allow_partial_resolution=getattr(hcfg, "allow_partial_resolution", True),
+        subtype_confidence_threshold=getattr(hcfg, "subtype_confidence_threshold", 0.10),
+        # Soft gating is the default hierarchical mode (see deconv_bulk).
+        hierarchical_gating=getattr(hcfg, "hierarchical_gating", "soft"),
+        gating_version=getattr(hcfg, "gating_version", "soft_gating-1.0"),
     )
+    for _k in list(kwargs):
+        if _k in gate:
+            gate[_k] = kwargs.pop(_k)
+    return run_hierarchical_spatial(
+        Y, ref, array_row, array_col, lib_sizes, gene_names, mapping,
+        spot_ids, config=cfg, **gate, **kwargs)
 
 
 def build_reference(
@@ -120,14 +396,14 @@ def generate_report(
     the embedded ``deconv`` estimate type).  Extra kwargs (``separability``,
     ``figures``, ``output_files`` …) are forwarded to the report generator.
     """
-    from tissueresolve.report import html
+    from tissueresolve.report import orchestration
     from tissueresolve.results import BulkDeconvResult, SpatialDeconvResult
 
     deconv = getattr(result, "deconv", None)
     if isinstance(deconv, BulkDeconvResult):
-        return html.generate_bulk_report(result, output_path, **kwargs)
+        return orchestration.generate_bulk_report(result, output_path, **kwargs)
     if isinstance(deconv, SpatialDeconvResult):
-        return html.generate_spatial_report(result, output_path, **kwargs)
+        return orchestration.generate_spatial_report(result, output_path, **kwargs)
     raise TypeError(
         "generate_report: result must be a BulkPipelineResult or "
         "SpatialPipelineResult (with a .deconv result object)."

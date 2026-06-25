@@ -1,0 +1,12 @@
+# Conda environment for Python spatial tools (cell2location, optionally tangram).
+# Create with:  conda env create -f benchmarks/envs/benchmark_python_cell2location.yml
+# GPU strongly recommended for cell2location; CPU works but is slow (use --fast).
+name: tissueresolve-bench-c2l
+channels: [conda-forge, defaults]
+dependencies:
+  - python=3.10
+  - pip
+  - pip:
+      - cell2location        # pulls scvi-tools, pyro, torch
+      - tangram-sc           # optional
+      # stereoscope is part of scvi-tools (scvi.external.RNAStereoscope)

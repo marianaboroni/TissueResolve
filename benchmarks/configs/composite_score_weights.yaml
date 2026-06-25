@@ -1,0 +1,7 @@
+# Composite benchmark score weights (must sum to ~1.0).
+accuracy: 0.35
+robustness: 0.20
+usability: 0.15
+interpretability: 0.15
+resolution_awareness: 0.10
+runtime_resource: 0.05

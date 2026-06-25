@@ -19,7 +19,24 @@ __all__ = [
     "validate_matrix_shape",
     "validate_cell_type_column",
     "validate_gene_names_match",
+    "detect_broad_cell_type_col",
+    "detect_fine_cell_type_col",
+    "validate_hierarchical_annotations",
+    "summarize_hierarchical_annotations",
 ]
+
+# Candidate obs columns for broad (compartment / lineage) labels, in priority
+# order.  Detection is a *convenience*; hierarchical mode never silently infers
+# a hierarchy without telling the user (the CLI prints what it found).
+BROAD_COL_CANDIDATES = (
+    "broad_cell_type", "major_cell_type", "cell_type_major", "cell_type_broad",
+    "compartment", "lineage", "cell_class", "broad_annotation",
+)
+# Candidate obs columns for fine (subpopulation / cell-state) labels.
+FINE_COL_CANDIDATES = (
+    "sub_cell_type", "cell_type_fine", "cell_type", "cell_state", "subtype",
+    "annotation", "author_cell_type", "fine_annotation",
+)
 
 logger = logging.getLogger("tissueresolve.io.validation")
 
@@ -217,3 +234,166 @@ def validate_counts_matrix(
                 "counts matrix contains non-integer values.  "
                 "Pass raw integer counts for reference construction."
             )
+
+
+# ---------------------------------------------------------------------------
+# Hierarchical (broad/fine) annotation detection & validation
+# ---------------------------------------------------------------------------
+
+
+def _detect_col(obs: pd.DataFrame, candidates, *, exclude: Optional[str] = None):
+    """Return the first *candidates* column present in *obs* (case-insensitive)."""
+    lower = {str(c).lower(): c for c in obs.columns}
+    for cand in candidates:
+        col = lower.get(cand.lower())
+        if col is not None and col != exclude:
+            return col
+    return None
+
+
+def detect_broad_cell_type_col(obs: pd.DataFrame) -> Optional[str]:
+    """Detect a broad/compartment annotation column in ``adata.obs``.
+
+    Returns the matched column name, or ``None`` if no known candidate is
+    present.  Never guesses silently — callers must report what was detected.
+    """
+    return _detect_col(obs, BROAD_COL_CANDIDATES)
+
+
+def detect_fine_cell_type_col(
+    obs: pd.DataFrame, *, exclude: Optional[str] = None,
+) -> Optional[str]:
+    """Detect a fine/subpopulation annotation column in ``adata.obs``.
+
+    *exclude* (e.g. the detected broad column) is skipped so the same column is
+    never returned for both roles.
+    """
+    return _detect_col(obs, FINE_COL_CANDIDATES, exclude=exclude)
+
+
+def validate_hierarchical_annotations(
+    obs: pd.DataFrame,
+    broad_col: str,
+    fine_col: str,
+    *,
+    max_fine_per_broad: int = 25,
+    min_cells_per_fine: int = 10,
+) -> dict:
+    """Validate broad/fine annotation columns for hierarchical deconvolution.
+
+    Validation rules (errors are raised, soft issues are warnings):
+
+    * both columns must exist in *obs*;
+    * neither column may contain missing values;
+    * every fine label must map to exactly **one** broad label;
+    * (warn) a broad family with > ``max_fine_per_broad`` fine labels;
+    * (warn) a fine label with < ``min_cells_per_fine`` cells.
+
+    Returns
+    -------
+    dict
+        ``{"mapping": {fine: broad}, "warnings": [...],
+        "n_broad": int, "n_fine": int}``.  The returned mapping is suitable for
+        :func:`tissueresolve.reference.hierarchy.build_cell_type_hierarchy`.
+    """
+    avail = list(obs.columns)
+    for role, col in (("broad", broad_col), ("fine", fine_col)):
+        if col not in obs.columns:
+            raise KeyError(
+                f"Hierarchical {role} cell-type column {col!r} not found in "
+                f"adata.obs.  Available columns: {avail}.  "
+                "Set --broad-cell-type-col / --fine-cell-type-col to existing "
+                "columns, or provide --cell-type-hierarchy mapping.tsv."
+            )
+    if broad_col == fine_col:
+        raise ValueError(
+            "Hierarchical broad and fine cell-type columns must differ "
+            f"(both are {broad_col!r})."
+        )
+
+    broad = obs[broad_col].astype("object")
+    fine = obs[fine_col].astype("object")
+    for role, col, ser in (("broad", broad_col, broad), ("fine", fine_col, fine)):
+        n_missing = int(ser.isna().sum() + (ser.astype(str).str.strip() == "").sum())
+        if n_missing:
+            raise ValueError(
+                f"Hierarchical {role} column {col!r} has {n_missing} "
+                "missing/blank value(s).  Annotate every cell or subset the "
+                "reference before hierarchical deconvolution."
+            )
+
+    # every fine label must map to exactly one broad label
+    pairs = (
+        pd.DataFrame({"fine": fine.astype(str), "broad": broad.astype(str)})
+        .drop_duplicates()
+    )
+    multi = pairs.groupby("fine")["broad"].nunique()
+    ambiguous = multi[multi > 1]
+    if len(ambiguous):
+        examples = {
+            f: sorted(pairs.loc[pairs["fine"] == f, "broad"].unique())
+            for f in list(ambiguous.index)[:5]
+        }
+        raise ValueError(
+            "Each fine cell type must map to exactly one broad family, but "
+            f"{len(ambiguous)} fine label(s) map to multiple broad labels: "
+            f"{examples}.  Fix the reference annotations (one broad family per "
+            "fine cell type) before hierarchical deconvolution."
+        )
+
+    mapping = dict(zip(pairs["fine"], pairs["broad"]))
+
+    issues: list[str] = []
+    # broad families with too many fine subtypes
+    per_broad = pairs.groupby("broad")["fine"].nunique()
+    crowded = per_broad[per_broad > max_fine_per_broad]
+    for fam, n in crowded.items():
+        msg = (f"broad family {fam!r} contains {n} fine subtypes "
+               f"(> {max_fine_per_broad}); within-family separability may be low.")
+        issues.append(msg)
+        warnings.warn(msg, stacklevel=2)
+    # rare fine labels
+    fine_counts = fine.astype(str).value_counts()
+    rare = fine_counts[fine_counts < min_cells_per_fine]
+    for label, n in rare.items():
+        msg = (f"fine cell type {label!r} has only {n} cell(s) "
+               f"(< {min_cells_per_fine}); its signature may be unreliable.")
+        issues.append(msg)
+        warnings.warn(msg, stacklevel=2)
+
+    return {
+        "mapping": mapping,
+        "warnings": issues,
+        "n_broad": int(pairs["broad"].nunique()),
+        "n_fine": int(pairs["fine"].nunique()),
+    }
+
+
+def summarize_hierarchical_annotations(
+    obs: pd.DataFrame,
+    broad_col: str,
+    fine_col: str,
+) -> pd.DataFrame:
+    """Per-(broad, fine) summary table: cell counts and subtypes-per-family.
+
+    Returns a tidy DataFrame with columns
+    ``broad_cell_type, fine_cell_type, n_cells, n_fine_in_family`` sorted by
+    family then descending cell count.  Saved by reference construction as
+    ``hierarchy_summary``-style tables.
+    """
+    df = pd.DataFrame({
+        "broad_cell_type": obs[broad_col].astype(str),
+        "fine_cell_type": obs[fine_col].astype(str),
+    })
+    counts = (
+        df.groupby(["broad_cell_type", "fine_cell_type"])
+        .size().rename("n_cells").reset_index()
+    )
+    n_fine = (
+        counts.groupby("broad_cell_type")["fine_cell_type"]
+        .transform("nunique")
+    )
+    counts["n_fine_in_family"] = n_fine
+    return counts.sort_values(
+        ["broad_cell_type", "n_cells"], ascending=[True, False]
+    ).reset_index(drop=True)
