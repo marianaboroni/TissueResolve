@@ -195,6 +195,7 @@ class ReferenceBuilder:
         adata: "anndata.AnnData",  # type: ignore[name-defined]
         *,
         estimate_overdispersion: bool = False,
+        gene_selection: Optional[str] = None,
     ) -> ReferenceSignature:
         """Build from an in-memory AnnData object.
 
@@ -205,6 +206,14 @@ class ReferenceBuilder:
             counts.  ``adata.obs[celltype_col]`` must be present.
         estimate_overdispersion:
             See :meth:`build_from_df`.
+        gene_selection:
+            Optional, **opt-in, non-default**. ``"donor_de"`` runs donor-aware
+            one-vs-rest DE gene selection (``reference.gene_selection``) on the
+            per-cell data and stores the panel on ``ReferenceSignature.selected_genes``
+            for the bulk pipeline to use as its default panel. Requires a donor
+            column; ignored (with a warning) when absent. Benchmark-gated winner over
+            the default markers on breast+lung donor-held-out; **experimental**, and
+            promotion to the default marker path is pending real-bulk validation.
 
         Raises
         ------
@@ -235,13 +244,36 @@ class ReferenceBuilder:
         if self.cfg.donor_col and self.cfg.donor_col in adata.obs.columns:
             donors = adata.obs[self.cfg.donor_col].astype(str).tolist()
 
-        return self._aggregate(
+        ref = self._aggregate(
             X=X,
             gene_names=gene_names,
             cell_types=cell_types,
             donors=donors,
             estimate_overdispersion=estimate_overdispersion,
         )
+        if gene_selection:
+            ref.selected_genes = self._select_genes_from_adata(adata, gene_selection,
+                                                               set(ref.gene_names))
+        return ref
+
+    def _select_genes_from_adata(self, adata, method: str, ref_genes: set) -> Optional[list]:
+        """Opt-in build-time gene selection (experimental). Returns panel or None."""
+        import warnings
+        if not (self.cfg.donor_col and self.cfg.donor_col in adata.obs.columns):
+            warnings.warn(
+                f"gene_selection={method!r} requires a donor column "
+                f"({self.cfg.donor_col!r}); skipping — using default markers.",
+                stacklevel=2)
+            return None
+        if method != "donor_de":
+            raise ValueError(f"unknown gene_selection {method!r}; use 'donor_de' or None")
+        from tissueresolve.reference.gene_selection import select_donor_aware_genes
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            genes = select_donor_aware_genes(adata, self.cfg.celltype_col,
+                                             self.cfg.donor_col)
+        panel = [g for g in genes if g in ref_genes]
+        return panel or None
 
     def build_from_h5ad(
         self,
@@ -249,6 +281,7 @@ class ReferenceBuilder:
         *,
         estimate_overdispersion: bool = False,
         backed: bool = False,
+        gene_selection: Optional[str] = None,
     ) -> ReferenceSignature:
         """Build from a ``.h5ad`` file.
 
@@ -274,7 +307,8 @@ class ReferenceBuilder:
             backed=backed,
         )
         return self.build_from_adata(
-            adata, estimate_overdispersion=estimate_overdispersion
+            adata, estimate_overdispersion=estimate_overdispersion,
+            gene_selection=gene_selection,
         )
 
     # ------------------------------------------------------------------

@@ -57,3 +57,15 @@ spillover, rare precision/recall, and uncertainty calibration (ECE/Brier). A rou
 retained only if it improves conditional within-family recovery without degrading rare
 niches/spillover, replicated across seeds and both tissues. Start with **§3 (covariance,
 low-rank)** and **§5 (reliability-weighted GLM)** as the highest-value, composable bets.
+
+## Under investigation — supervised conditional family estimator
+
+A supervised conditional family estimator is under investigation for learnable
+fine-state families: it learns the within-family composition from donor-held-out
+pseudobulks and only reports fine states where learnability is demonstrated
+(otherwise grouped / unresolved). On clean donor-held-out pseudobulk it is promising
+(several learnable families incl. collinear T/NK), but it **did not pass a real-bulk
+realism gate** (cross-platform protocol shift + technical confounders): the gain is
+protocol/donor-fragile and inflates rare false positives across platforms, so it is
+**experimental, not part of the default workflow, and not integrated** pending true
+real-bulk validation. See `docs/dev/CONDITIONAL_FAMILY_ESTIMATOR_RESULTS.md`.

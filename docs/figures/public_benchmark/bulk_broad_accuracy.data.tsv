@@ -1,0 +1,9 @@
+method	broad_pearson
+CorrelationMatcher_baseline	0.6149371575924604
+TissueResolve_hierarchical	0.6846497198557596
+BisqueRNA	0.7217955930117534
+TissueResolve_wNNLS	0.7783686795836352
+MuSiC	0.7974592488969053
+RidgeNNLS_baseline	0.7979358337485661
+NNLS_baseline	0.8129028193330724
+TissueResolve_PoissonGLM	0.8911728051344343

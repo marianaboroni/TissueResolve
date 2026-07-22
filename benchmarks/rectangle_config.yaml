@@ -1,0 +1,56 @@
+# Rectangle vs TissueResolve — single reproducible benchmark config.
+# One command:
+#   python benchmarks/rectangle_comparison.py --config benchmarks/rectangle_config.yaml \
+#       --output benchmarks/results/rectangle_benchmark
+# Real single-cell atlases are required; the run is gated by --run-real-data
+# (or TISSUERESOLVE_RUN_REAL_DATA=1). Rectangle runs in its isolated 3.11 env.
+
+datasets:
+  - breast
+  - lung
+
+seeds: [0, 1, 2, 3, 4]
+
+bulk_scenarios:
+  - complete_reference
+  - cross_platform            # skipped where no multi-chemistry 'assay' column
+  - missing_rare
+  - missing_abundant
+  - missing_activated_state   # skipped where no activated/state type present
+  - low_depth
+  - overdispersion
+  - high_collinearity         # shares complete data; collinearity-focused scoring
+  - technical_noise
+  - gene_dropout
+
+methods:
+  - Rectangle_raw
+  - Rectangle_mrnacorrected
+  - TissueResolve_flat_default
+  - TissueResolve_hierarchical
+  - TissueResolve_auto
+  - NNLS_baseline
+  - Weighted_NNLS_baseline
+  - Poisson_GLM
+  - NB_GLM                    # experimental; recorded as negative result if unstable
+
+# multiple abundance thresholds for presence/rare curves (no single fixed cutoff)
+presence_thresholds: [0.001, 0.0025, 0.005, 0.01, 0.02]
+
+pseudobulk:
+  n_per_regime: 2             # pseudobulk samples per mixing regime
+  n_cells: 200
+
+# query-side confounders (technical, not applied to production pipeline)
+perturbations:
+  low_depth_fraction: 0.1     # binomial thinning to ~10% depth
+  overdispersion_cv: 0.5
+  technical_noise_cv: 0.3
+  gene_dropout_fraction: 0.2
+
+rectangle:
+  ref_cells_per_type: 400     # cap reference cells/type (runtime bound)
+  bootstraps: 5
+
+glm:
+  panel_size: 1500            # top-specificity gene panel for Poisson/NB GLM

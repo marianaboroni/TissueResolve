@@ -71,6 +71,10 @@ class BulkPipelineResult:
     gene_selection: Optional[Any] = None
     protocol_risk: Optional[Any] = None
     run_metadata: dict[str, Any] = field(default_factory=dict)
+    #: Optional calibrated identifiability certificate (experimental, opt-in via
+    #: ``deconv_bulk(..., identifiability=True)``).  A reported diagnostic only — it
+    #: does NOT modify ``deconv.proportions`` or any estimate.  ``None`` unless requested.
+    identifiability: Optional[Any] = None
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +190,16 @@ class BulkPipeline:
 
         # 4. Marker selection (when no pre-selected panel)
         gene_selection = None
+        # Opt-in: a reference built with a stored panel (e.g. donor-aware DE selection
+        # at build time) uses it as the default panel. Backward-compatible: references
+        # without `selected_genes` fall through to the standard marker selection.
+        if gene_panel is None and getattr(ref, "selected_genes", None):
+            stored = [g for g in ref.selected_genes if g in set(shared_genes)]
+            if len(stored) >= 2:
+                gene_panel = stored
+                logger.info("Using reference-stored gene panel: %d genes "
+                            "(of %d stored, in shared).", len(stored),
+                            len(ref.selected_genes))
         if gene_panel is None:
             from tissueresolve.reference.markers import GeneSelector
             selector = GeneSelector(config=self.cfg.genes)

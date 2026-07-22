@@ -42,6 +42,7 @@ benchmarks/external_tools/inputs/spatial/
 benchmarks/envs/Rlib/
 benchmarks/envs/r_lib/
 benchmarks/envs/c2l_py39/
+benchmarks/envs/rectangle_py311/
 benchmarks/logs/
 *.h5ad
 *.h5
@@ -58,3 +59,4 @@ data/
 benchmarks/envs/c2l_venv/
 examples/second_tissue_crc/data/
 examples/second_tissue_lung/data/
+benchmarks/results/

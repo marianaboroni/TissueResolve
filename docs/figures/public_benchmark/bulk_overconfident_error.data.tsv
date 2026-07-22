@@ -1,0 +1,9 @@
+method	overconfident_error_rate
+TissueResolve_wNNLS	0.08470507544581618
+NNLS_baseline	0.021262002743484224
+BisqueRNA	0.018518518518518517
+TissueResolve_PoissonGLM	0.007201646090534979
+CorrelationMatcher_baseline	0.0
+MuSiC	0.0
+RidgeNNLS_baseline	0.0
+TissueResolve_hierarchical	0.0

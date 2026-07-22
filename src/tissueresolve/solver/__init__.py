@@ -4,18 +4,23 @@ from tissueresolve.solver.nnls import NNLSSolver
 from tissueresolve.solver.weighted_nnls import WeightedNNLSSolver
 from tissueresolve.solver.marker_nnls import MarkerNNLSSolver
 from tissueresolve.solver.ridge_nnls import RidgeNNLSSolver
+from tissueresolve.solver.poisson_glm import PoissonGLMSolver, NBGLMSolver
 from tissueresolve.solver.ensemble import EnsembleSolver
 from tissueresolve.solver.auto import AutoSolver, candidate_solvers
+from tissueresolve.solver.auto_composition import AutoCompositionSolver
 
 SOLVERS = {
     "nnls": NNLSSolver, "weighted_nnls": WeightedNNLSSolver,
     "marker_nnls": MarkerNNLSSolver, "ridge_nnls": RidgeNNLSSolver,
+    "poisson": PoissonGLMSolver, "nb": NBGLMSolver,
     "ensemble_nnls": EnsembleSolver, "auto": AutoSolver,
+    "auto_composition": AutoCompositionSolver,
 }
 
 __all__ = ["BaseSolver", "SolverResult", "align_query_to_reference",
            "NNLSSolver", "WeightedNNLSSolver", "MarkerNNLSSolver",
-           "RidgeNNLSSolver", "EnsembleSolver", "AutoSolver",
+           "RidgeNNLSSolver", "PoissonGLMSolver", "NBGLMSolver",
+           "EnsembleSolver", "AutoSolver", "AutoCompositionSolver",
            "candidate_solvers", "SOLVERS", "get_solver"]
 
 

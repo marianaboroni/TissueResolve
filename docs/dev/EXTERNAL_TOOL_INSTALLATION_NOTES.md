@@ -13,6 +13,7 @@ probed directly. No tool is silently skipped — every status has a reason.
 | CARD | spatial | 1.1 | `benchmarks/envs/Rlib` | Rscript bridge |
 | spacexr (RCTD) | spatial | 2.2.1 | `benchmarks/envs/Rlib` | Rscript bridge (Seurat absent; core RCTD usable) |
 | cell2location | spatial | 0.1.4 | `benchmarks/envs/c2l_py39` | scvi 1.1.6, torch 2.8.0, **MPS (Metal) GPU** available; no CUDA. ~160 s+/run |
+| Rectangle (rectanglepy) | bulk | 1.5.0 | `benchmarks/envs/rectangle_py311` | **Python 3.11** (Homebrew python@3.11 3.11.15); project venv is 3.9 so Rectangle runs **out-of-process** via `benchmarks/dev/run_rectangle.py`, same pattern as cell2location. Needs single-cell reference (not a mean signature) → benchmarked in a dedicated dev script, not the signature-based product harness. Emits a scalar `Unknown` residual column. Install: `bash benchmarks/envs/install_rectangle.sh`. |
 
 Internal baselines (always available, `.venv`): NNLS, WNNLS, ridge-NNLS, marker-NNLS,
 TissueResolve flat, TissueResolve hierarchical + soft gating, NNLS-per-spot.

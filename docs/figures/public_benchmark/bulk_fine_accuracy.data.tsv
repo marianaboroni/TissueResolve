@@ -1,0 +1,9 @@
+method	fine_pearson
+TissueResolve_hierarchical	0.22654917506970693
+CorrelationMatcher_baseline	0.2706591369500097
+TissueResolve_wNNLS	0.3449848012009398
+RidgeNNLS_baseline	0.455257691311008
+BisqueRNA	0.47418135757598495
+NNLS_baseline	0.5035583758999357
+MuSiC	0.5446486145581894
+TissueResolve_PoissonGLM	0.7084259740311921

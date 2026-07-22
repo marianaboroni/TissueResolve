@@ -1,0 +1,5 @@
+method	fine_pearson
+NNLS_spot_baseline	0.6218487760337374
+TissueResolve_default	0.7918395000016454
+TissueResolve_edge_aware	0.8122105107531336
+TissueResolve_weak_smoothing	0.8187044446332893

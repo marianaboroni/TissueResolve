@@ -1,0 +1,5 @@
+method	rare_niche_sensitivity
+NNLS_spot_baseline	0.16666666666666666
+TissueResolve_default	0.8611111111111112
+TissueResolve_edge_aware	0.8611111111111112
+TissueResolve_weak_smoothing	0.8611111111111112

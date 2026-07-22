@@ -1,0 +1,5 @@
+datasets: [breast, lung]
+seeds: [0, 1, 2, 3, 4]
+budget: 300                 # equal, stratified per-type (round-robin) across strategies
+solver: poisson
+strategies: [A_current, B_fine_global]   # C_union / D_hierarchical / E_confirmation: next

@@ -1,0 +1,19 @@
+method	bulk	spatial
+BisqueRNA	2.0	
+CARD		1.0
+CorrelationMatcher_baseline	2.0	
+DestVI/stereoscope (scvi-tools)		1.0
+MuSiC	2.0	
+NNLS_baseline	2.0	
+NNLS_spot_baseline		2.0
+RCTD (spacexr)		1.0
+RidgeNNLS_baseline	2.0	
+SPOTlight		0.0
+Tangram		0.0
+TissueResolve_PoissonGLM	2.0	
+TissueResolve_default		2.0
+TissueResolve_edge_aware		2.0
+TissueResolve_hierarchical	2.0	
+TissueResolve_wNNLS	2.0	
+TissueResolve_weak_smoothing		2.0
+cell2location		1.0

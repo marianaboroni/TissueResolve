@@ -26,6 +26,7 @@ except PackageNotFoundError:
 
 from tissueresolve.api import (
     build_reference,
+    bulk_identifiability,
     deconv_bulk,
     deconv_spatial,
     generate_report,
@@ -35,6 +36,7 @@ from tissueresolve.api import (
 __all__ = [
     "__version__",
     "build_reference",
+    "bulk_identifiability",
     "deconv_bulk",
     "deconv_spatial",
     "generate_report",

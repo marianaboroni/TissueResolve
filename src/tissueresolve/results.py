@@ -137,6 +137,10 @@ class ReferenceSignature:
     donor_cv: np.ndarray | None = field(default=None, repr=False)
     n_cells_per_type: dict[str, int] = field(default_factory=dict)
     genome: str = "hg38"
+    #: Optional recommended gene panel chosen at build time (e.g. donor-aware DE
+    #: selection). When present, the bulk pipeline uses it as the default panel.
+    #: Backward-compatible: ``None`` reproduces the previous marker-selection path.
+    selected_genes: list[str] | None = field(default=None, repr=False)
 
     # ------------------------------------------------------------------
     # Properties
@@ -354,6 +358,9 @@ class ReferenceSignature:
         _save_optional_array(self.R_log, path / "R_log.npy")
         _save_optional_array(self.phi_g, path / "phi_g.npy")
         _save_optional_array(self.donor_cv, path / "donor_cv.npy")
+        if self.selected_genes is not None:
+            (path / "selected_genes.txt").write_text(
+                "\n".join(self.selected_genes), encoding="utf-8")
 
         meta: dict[str, Any] = {
             "tissueresolve_object": "ReferenceSignature",
@@ -366,6 +373,7 @@ class ReferenceSignature:
             "has_R_log": self.R_log is not None,
             "has_phi_g": self.phi_g is not None,
             "has_donor_cv": self.donor_cv is not None,
+            "has_selected_genes": self.selected_genes is not None,
         }
         with (path / "metadata.json").open("w", encoding="utf-8") as fh:
             json.dump(meta, fh, indent=2)
@@ -398,6 +406,9 @@ class ReferenceSignature:
             donor_cv=_load_optional_array(path / "donor_cv.npy"),
             n_cells_per_type=meta.get("n_cells_per_type", {}),
             genome=meta.get("genome", "hg38"),
+            selected_genes=(
+                (path / "selected_genes.txt").read_text(encoding="utf-8").splitlines()
+                if (path / "selected_genes.txt").exists() else None),
         )
 
     def __repr__(self) -> str:

@@ -70,6 +70,54 @@ def _solver_bulk_result(bulk, ref, solver: str, cfg):
                               run_metadata={"solver": solver, **res.diagnostics})
 
 
+def bulk_identifiability(bulk, ref, *, shift_scale=None, min_detect_frac: float = 0.10, **kwargs):
+    """Calibrated identifiability certificate for a (reference, bulk-query) pair (experimental).
+
+    A *reported diagnostic* — it predicts, before/independently of deconvolution, which cell types
+    are recoverable and which cluster together as structurally confounded (with a swap-based
+    recoverability class, per-type donor-aware predicted SD, and a ``recommended_merge`` for
+    GROUP_ONLY/UNRESOLVABLE clusters).  It changes no estimate.
+
+    Parameters
+    ----------
+    bulk:
+        Genes × samples count matrix (same orientation as :func:`deconv_bulk`).
+    ref:
+        A :class:`~tissueresolve.results.ReferenceSignature`.  For donor-level uncertainty the
+        reference must have been built with a ``donor_col`` (so ``donor_cv`` is populated);
+        otherwise a warning is emitted and intervals reflect counting noise only.
+    shift_scale:
+        Donor-shift inflation.  ``None`` uses the validated default (:data:`DEFAULT_SHIFT_SCALE`).
+    """
+    import warnings as _warnings
+    import numpy as _np
+    import pandas as _pd
+    from tissueresolve.reference.identifiability_calibration import (
+        calibrated_identifiability_certificate, DEFAULT_SHIFT_SCALE)
+
+    if not isinstance(bulk, _pd.DataFrame):
+        raise TypeError("bulk must be a genes × samples pandas DataFrame")
+    ref_genes = set(map(str, ref.gene_names))
+    present = [g for g in map(str, bulk.index) if g in ref_genes]
+    if len(present) < 2:
+        raise ValueError("fewer than 2 genes overlap between bulk and reference")
+    sub = bulk.loc[[g in ref_genes for g in map(str, bulk.index)]]
+    detect_frac = (sub > 0).mean(axis=1)
+    detectable = [g for g in map(str, sub.index) if detect_frac.get(g, 0) >= min_detect_frac]
+    if len(detectable) < 2:
+        detectable = present
+    library_size = float(_np.median(bulk.sum(axis=0).to_numpy(dtype=float)))
+    if getattr(ref, "donor_cv", None) is None:
+        _warnings.warn(
+            "bulk_identifiability: reference has no donor_cv (built without donor_col); "
+            "donor-level uncertainty is unavailable — predicted intervals reflect counting noise "
+            "only and will under-cover.  Rebuild the reference with a donor column for calibrated "
+            "uncertainty.", stacklevel=2)
+    s = DEFAULT_SHIFT_SCALE if shift_scale is None else float(shift_scale)
+    return calibrated_identifiability_certificate(
+        ref, query_detectable_genes=detectable, library_size=library_size, shift_scale=s, **kwargs)
+
+
 def deconv_bulk(
     bulk, ref, *, config=None, resolution_mode: Optional[str] = None,
     hierarchy_mapping: Optional[dict] = None, solver: Optional[str] = None,
@@ -77,6 +125,7 @@ def deconv_bulk(
     state_to_celltype: Optional[dict] = None,
     broad_col: Optional[str] = None, cell_type_col: Optional[str] = None,
     state_col: Optional[str] = None,
+    identifiability: bool = False, identifiability_shift_scale=None,
     **kwargs,
 ):
     """Run the bulk deconvolution pipeline.  Returns ``BulkPipelineResult``.
@@ -98,17 +147,55 @@ def deconv_bulk(
         broad_family}`` mapping.  When ``None``, families are inferred from the
         cell-type labels (a warning is emitted) — providing explicit broad/fine
         annotations or a mapping file is strongly preferred.
+    identifiability:
+        When ``True`` (default ``False``), attach an experimental calibrated
+        identifiability certificate (:func:`bulk_identifiability`) to the result's
+        ``identifiability`` attribute.  A reported diagnostic only — it does NOT
+        change ``deconv.proportions`` or any estimate.  Requires a reference built
+        with a donor column for calibrated donor-level uncertainty.
+    identifiability_shift_scale:
+        Donor-shift inflation for the certificate; ``None`` uses the validated default.
     """
     from tissueresolve.config import TissueResolveConfig
     from tissueresolve.bulk.pipeline import BulkPipeline
 
     import warnings as _warnings
 
+    def _finish(result):
+        """Attach the opt-in identifiability certificate (a reported diagnostic; never touches
+        estimates) to whatever result object each pipeline path returns."""
+        if not identifiability:
+            return result
+        try:
+            cert = bulk_identifiability(bulk, ref, shift_scale=identifiability_shift_scale)
+            try:
+                result.identifiability = cert                      # BulkPipelineResult field
+            except Exception:
+                md = getattr(result, "run_metadata", None)
+                if not isinstance(md, dict):
+                    md = getattr(result, "metadata", None)
+                if isinstance(md, dict):
+                    md["identifiability_certificate"] = cert
+        except Exception as e:  # diagnostic must never break the estimate
+            _warnings.warn(f"deconv_bulk(identifiability=True): certificate failed: {e}", stacklevel=2)
+        return result
+
     cfg = config or TissueResolveConfig()
-    # Explicit solver backbone (additive): only when requested.  Hierarchical +
-    # solver combination is not yet wired, so a solver implies a flat estimate.
+    # Count-likelihood GLM backbones (poisson/nb) compose with the hierarchical
+    # pipeline: run_hierarchical_bulk solves BOTH the family and fine levels via
+    # BulkPipeline, so selecting the GLM through cfg.bulk_solver.method makes
+    # hierarchical (and auto) benefit too — the count likelihood then drives the
+    # fine/within-family split, not just a flat estimate. This is opt-in and does
+    # not change the wNNLS default. Flat mode keeps the all-genes GLM backbone.
+    _GLM_METHODS = {"poisson": "poisson_glm_experimental", "nb": "nb_glm_experimental"}
+    if solver in _GLM_METHODS and resolution_mode in ("hierarchical", "auto"):
+        import copy as _copy
+        cfg = _copy.deepcopy(cfg)
+        cfg.bulk_solver.method = _GLM_METHODS[solver]
+        solver = None  # now carried by cfg.bulk_solver.method through the pipeline
+    # Explicit solver backbone (additive): NNLS-family backbones are flat-only.
     if solver is not None and resolution_mode in (None, "flat", "none", "auto"):
-        return _solver_bulk_result(bulk, ref, solver, cfg)
+        return _finish(_solver_bulk_result(bulk, ref, solver, cfg))
     if hasattr(cfg, "resolution") and resolution_mode is None:
         resolution_mode = getattr(cfg.resolution, "resolution_mode", None)
     resolution_mode = resolution_mode or "auto"
@@ -133,12 +220,12 @@ def deconv_bulk(
             result = BulkPipeline(cfg).run(bulk, ref, **kwargs)
             result.deconv.run_metadata["resolution_mode"] = "none"
             result.deconv.run_metadata["resolution_mode_requested"] = "auto"
-            return result
+            return _finish(result)
 
     if resolution_mode in ("none", "suggest"):
         result = BulkPipeline(cfg).run(bulk, ref, **kwargs)
         result.deconv.run_metadata["resolution_mode"] = resolution_mode
-        return result
+        return _finish(result)
 
     # ---- hierarchical mode ----
     from tissueresolve.bulk.hierarchical import run_hierarchical_bulk
@@ -170,14 +257,14 @@ def deconv_bulk(
     # reference's cell_types are *states*, so the cell_type→broad mapping comes
     # from the raw hierarchy_mapping, not from build_cell_type_hierarchy(states).
     if state_aware:
-        return _run_state_aware_bulk(
+        return _finish(_run_state_aware_bulk(
             bulk, ref, hierarchy_mapping, cfg, gate,
             reference_adata=reference_adata, state_to_celltype=state_to_celltype,
             broad_col=broad_col, cell_type_col=cell_type_col, state_col=state_col,
-            **kwargs)
+            **kwargs))
 
     mapping = build_cell_type_hierarchy(list(ref.cell_types), hierarchy_mapping)
-    return run_hierarchical_bulk(bulk, ref, mapping, config=cfg, **gate, **kwargs)
+    return _finish(run_hierarchical_bulk(bulk, ref, mapping, config=cfg, **gate, **kwargs))
 
 
 def _run_state_aware_bulk(bulk, ref, hierarchy_mapping, cfg, gate, *,
@@ -341,6 +428,7 @@ def build_reference(
     config=None,
     cell_type_col: Optional[str] = None,
     estimate_overdispersion: bool = False,
+    gene_selection: Optional[str] = None,
 ):
     """Build a :class:`ReferenceSignature` from a DataFrame, AnnData, or .h5ad.
 
@@ -368,17 +456,27 @@ def build_reference(
                 "build_reference from a DataFrame requires `metadata` "
                 "(per-cell cell-type labels)."
             )
+        if gene_selection:
+            import warnings as _w
+            _w.warn("build_reference(gene_selection=...) is only supported for "
+                    "AnnData/.h5ad sources; ignored for DataFrame input.", stacklevel=2)
         return builder.build_from_df(
             source, metadata, estimate_overdispersion=estimate_overdispersion
         )
     if isinstance(source, (str, Path)):
         return builder.build_from_h5ad(
-            str(source), estimate_overdispersion=estimate_overdispersion
+            str(source), estimate_overdispersion=estimate_overdispersion,
+            gene_selection=gene_selection,
         )
     if hasattr(source, "obs") and hasattr(source, "var") and hasattr(source, "X"):
         return builder.build_from_adata(
-            source, estimate_overdispersion=estimate_overdispersion
+            source, estimate_overdispersion=estimate_overdispersion,
+            gene_selection=gene_selection,
         )
+    if gene_selection:
+        import warnings as _w
+        _w.warn("build_reference(gene_selection=...) is only supported for AnnData/"
+                ".h5ad sources; ignored for DataFrame input.", stacklevel=2)
     raise TypeError(
         f"build_reference: unsupported source type {type(source)!r}.  "
         "Expected DataFrame, AnnData, or a path to an .h5ad file."

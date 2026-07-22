@@ -33,11 +33,23 @@ def align_query_to_reference(query: pd.DataFrame, ref: ReferenceSignature,
     """Return (sub_ref, B) with B as genes×samples aligned to the reference.
 
     *query* is genes×samples.  *genes* optionally restricts the panel; genes not
-    in the reference are dropped (never silently zero-filled)."""
+    in the reference are dropped (never silently zero-filled).
+
+    When *genes* is not given and the reference carries an opt-in recommended panel
+    (``ref.selected_genes``, e.g. donor-aware DE selection at build time), that panel
+    is used — so the ``solver=`` backbones honor the stored panel the same way the
+    ``BulkPipeline`` does. Backward-compatible: a reference without a stored panel
+    (the default) still uses all shared genes. An explicit *genes* argument always wins,
+    and a stored panel that overlaps the query in < 2 genes falls back to all shared."""
     ref_genes = set(map(str, ref.gene_names))
     q = query.copy()
     q.index = q.index.map(str)
-    candidate = [g for g in (genes or list(q.index)) if g in ref_genes and g in set(q.index)]
+    qset = set(q.index)
+    if genes is None:
+        stored = getattr(ref, "selected_genes", None)
+        if stored and sum(1 for g in stored if g in ref_genes and g in qset) >= 2:
+            genes = stored
+    candidate = [g for g in (genes or list(q.index)) if g in ref_genes and g in qset]
     if not candidate:
         raise ValueError("no shared genes between query and reference")
     sub = ref.subset_genes(candidate)
